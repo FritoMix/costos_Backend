@@ -1,0 +1,26 @@
+[project]
+name = "datacontrol-backend"
+version = "2.0.0"
+description = "API de DATACONTROL - recoleccion de datos de produccion de Fritomix SAS"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # isort (orden de los imports)
+    "B",   # bugbear (errores comunes)
+    "UP",  # pyupgrade (sintaxis moderna)
+]
+ignore = [
+    "E712",  # "== False" es necesario en las comparaciones de SQLAlchemy
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
