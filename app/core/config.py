@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_nombre_completo: str = "Administrador DATACONTROL"
     admin_password: str = ""
+    # Por defecto el administrador solo se crea la PRIMERA vez: si ya existe,
+    # no se toca su contrasena (evita pisar un cambio hecho desde la pantalla
+    # de Usuarios). Cuando se necesita recuperar el acceso en un despliegue
+    # (contrasena perdida/desconocida), se pone ADMIN_RESET_PASSWORD=true y,
+    # al arrancar, la contrasena del admin se restablece a ADMIN_PASSWORD.
+    # Es un interruptor de un solo uso: se quita despues de entrar.
+    admin_reset_password: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -8,7 +8,8 @@ crea desde Python al arrancar la API, leyendo ADMIN_USERNAME y
 ADMIN_PASSWORD del archivo .env.
 
 Es seguro que esto corra en cada arranque: si el usuario ya existe, no
-hace nada y no toca su contrasena.
+hace nada y no toca su contrasena, SALVO que se active expresamente
+ADMIN_RESET_PASSWORD=true (interruptor de recuperacion, ver mas abajo).
 """
 
 import logging
@@ -28,6 +29,7 @@ def crear_admin_inicial(db: Session) -> None:
         select(Usuario).where(Usuario.nombre_usuario == settings.admin_username)
     )
     if ya_existe is not None:
+        _tal_vez_restablecer_password(db, ya_existe)
         return
 
     if not settings.admin_password:
@@ -57,4 +59,45 @@ def crear_admin_inicial(db: Session) -> None:
     logger.info(
         'Usuario administrador "%s" creado. Cambia su contraseña desde la pantalla de Usuarios.',
         settings.admin_username,
+    )
+
+
+def _tal_vez_restablecer_password(db: Session, usuario: Usuario) -> None:
+    """
+    Restablece la contrasena del administrador SOLO si se activo el
+    interruptor de recuperacion (ADMIN_RESET_PASSWORD=true).
+
+    Sirve para recuperar el acceso a un despliegue donde el admin ya existia
+    con una contrasena distinta a la de ADMIN_PASSWORD. Es un interruptor de
+    un solo uso: despues de entrar, se quita la variable para que la API no
+    vuelva a pisar la contrasena en cada arranque.
+    """
+    if not settings.admin_reset_password:
+        return
+
+    if not settings.admin_password:
+        logger.warning(
+            "ADMIN_RESET_PASSWORD=true pero no hay ADMIN_PASSWORD: "
+            "no se pudo restablecer la contraseña del administrador."
+        )
+        return
+
+    cambios: list[str] = []
+    usuario.password_hash = hash_password(settings.admin_password)
+    cambios.append("contraseña")
+    if not usuario.activo:
+        usuario.activo = True
+        cambios.append("activo=True")
+    if usuario.eliminado:
+        usuario.eliminado = False
+        usuario.eliminado_por_id = None
+        usuario.fecha_eliminacion = None
+        cambios.append("reactivado")
+
+    db.commit()
+    logger.warning(
+        'Contraseña del administrador "%s" restablecida por ADMIN_RESET_PASSWORD (%s). '
+        "Quita esa variable del entorno para no repetirlo en el próximo arranque.",
+        settings.admin_username,
+        ", ".join(cambios),
     )
