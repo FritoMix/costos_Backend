@@ -71,14 +71,17 @@ def _crear_para(
             orden_id=orden_id,
             fecha_programada=fecha_programada or datetime.now(UTC),
         )
-        db.add(notificacion)
         try:
-            # Cada aviso se guarda por separado: si uno choca con el indice
-            # unico, no se pierden los demas.
-            db.flush()
+            # Savepoint por aviso: si este choca con el indice unico, solo
+            # se descarta este. Un rollback normal revertiria tambien los
+            # avisos ya preparados en la misma transaccion.
+            with db.begin_nested():
+                db.add(notificacion)
+                db.flush()
             creados += 1
         except IntegrityError:
-            db.rollback()
+            # El aviso ya existia (misma persona, orden y tipo).
+            continue
     return creados
 
 

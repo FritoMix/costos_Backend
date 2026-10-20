@@ -10,7 +10,7 @@ Si falta la calibracion del tanque o la densidad, esas columnas quedan
 vacias: el registro se guarda igual y no se inventa ningun valor.
 """
 
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -83,10 +83,24 @@ def _validar_desperdicio(db: Session, datos: RegistroHornoGuardar) -> bool:
     return True
 
 
+def _validar_niveles_aceite(inicial: Decimal, final: Decimal) -> None:
+    """
+    El nivel final no puede superar al inicial: significaria un consumo
+    negativo y sesgaria los indicadores de toda la planta. Si en la planta
+    rellenaron el tanque durante la tanda, hay que corregir las medidas.
+    """
+    if final > inicial:
+        raise ErrorDeValidacion(
+            "El nivel final del aceite no puede ser mayor que el inicial. "
+            "Si se rellenó el tanque durante la tanda, corrige las medidas antes de guardar."
+        )
+
+
 def _aplicar_datos(
     db: Session, registro: RegistroHorno, orden: OrdenProduccion, datos: RegistroHornoGuardar
 ) -> None:
     peso_bulto = obtener_peso_estandar_bulto(db)
+    _validar_niveles_aceite(datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm)
     diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
     litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
         db, orden.horno, orden.fecha, diferencia

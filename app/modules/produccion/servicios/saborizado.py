@@ -6,7 +6,6 @@ las canastillas UNA POR UNA: los kg recibidos son la suma de esos pesos
 reales, nunca un estimado. El turno se detecta solo a partir de la hora.
 """
 
-from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
