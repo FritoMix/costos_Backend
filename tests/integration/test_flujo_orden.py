@@ -190,6 +190,26 @@ def test_cancelar_orden_libera_el_horno(db, datos_base, orden_guardar):
     assert segunda.estado == EstadoOrden.EN_PRODUCCION
 
 
+def test_borrado_suave_de_una_orden_en_produccion_libera_el_horno(
+    db, datos_base, orden_guardar
+):
+    primera = servicio_ordenes.crear_orden(
+        db, orden_guardar(), datos_base.supervisor
+    )
+    servicio_ordenes.iniciar_orden(db, primera)
+
+    servicio_ordenes.eliminar_orden(db, primera, datos_base.admin)
+
+    assert primera.eliminado is True
+    assert primera.estado == EstadoOrden.CANCELADA
+
+    segunda = servicio_ordenes.crear_orden(
+        db, orden_guardar(), datos_base.supervisor
+    )
+    servicio_ordenes.iniciar_orden(db, segunda)
+    assert segunda.estado == EstadoOrden.EN_PRODUCCION
+
+
 def test_no_se_puede_editar_una_orden_finalizada(db, datos_base, orden_guardar):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor

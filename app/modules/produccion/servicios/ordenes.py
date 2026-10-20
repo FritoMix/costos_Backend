@@ -243,6 +243,7 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
             select(OrdenProduccion).where(
                 OrdenProduccion.horno_id == datos.horno_id,
                 OrdenProduccion.estado == EstadoOrden.EN_PRODUCCION,
+                OrdenProduccion.eliminado.is_(False),
                 OrdenProduccion.id != orden.id,
             )
         )
@@ -282,6 +283,7 @@ def iniciar_orden(db: Session, orden: OrdenProduccion) -> OrdenProduccion:
         select(OrdenProduccion).where(
             OrdenProduccion.horno_id == orden.horno_id,
             OrdenProduccion.estado == EstadoOrden.EN_PRODUCCION,
+            OrdenProduccion.eliminado.is_(False),
         )
     )
     if ocupado is not None:
@@ -369,6 +371,12 @@ def eliminar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario) -> int
             recepcion.eliminado_por_id = usuario.id
             recepcion.fecha_eliminacion = datetime.now(UTC)
             arrastrados += 1
+
+    # Una orden borrada deja de existir para el negocio. Si estaba Pendiente o
+    # En produccion se cierra como Cancelada: asi libera el horno y no bloquea
+    # la siguiente orden (el indice unico parcial solo mira el estado).
+    if orden.estado in EstadoOrden.ACTIVOS:
+        orden.estado = EstadoOrden.CANCELADA
 
     marcar_eliminado_por(db, orden, usuario)
     db.commit()
