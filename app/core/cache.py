@@ -37,7 +37,7 @@ def cache_ttl(segundos: int | float, *, maxsize: int = MAX_ENTRADAS) -> Callable
     """
 
     def decorador(funcion: Callable) -> Callable:
-        cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
+        cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         cerrojo = threading.Lock()
 
         def envuelto(*args, **kwargs) -> Any:

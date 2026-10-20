@@ -5,7 +5,7 @@ Contratos de entrada y salida del modulo Produccion.
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # --- Referencias cortas a otros catalogos ---------------------------------
 
@@ -129,6 +129,13 @@ class RegistroHornoGuardar(BaseModel):
     tipo_desperdicio_id: int | None = None
     cantidad_desperdicio_kg: Decimal | None = Field(default=None, ge=0)
     observacion_desperdicio: str | None = None
+
+    @model_validator(mode="after")
+    def _nivel_final_no_supera_inicial(self) -> "RegistroHornoGuardar":
+        """Primera barrera: el consumo de aceite no puede ser negativo."""
+        if self.nivel_aceite_final_cm > self.nivel_aceite_inicial_cm:
+            raise ValueError("El nivel final del aceite no puede ser mayor que el inicial.")
+        return self
 
 
 # --- Registro de saborizado (recepciones) ---------------------------------

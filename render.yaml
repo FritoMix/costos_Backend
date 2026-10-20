@@ -1,27 +1,39 @@
-# Exported from Render on 2026-09-15T20:26:39Z
+# Blueprint de Render para el backend de DATACONTROL.
+#
+# Los nombres de las variables deben coincidir EXACTAMENTE con
+# app/core/config.py. Las que llevan sync: false se piden en el panel de
+# Render y nunca se guardan en el repositorio.
 version: "1"
 projects:
-- name: costos_backend
-  environments:
-  - name: Production
-    services:
-    - type: web
-      name: costos_Backend
-      runtime: docker
-      repo: https://github.com/FritoMix/costos_Backend
-      plan: free
-      envVars:
-      - key: url
-        sync: false
-      - key: user
-        sync: false
-      - key: database
-        sync: false
-      - key: port
-        sync: false
-      - key: host
-        sync: false
-      region: oregon
-      dockerContext: .
-      dockerfilePath: ./Dockerfile
-      autoDeployTrigger: commit
+  - name: costos_backend
+    environments:
+      - name: Production
+        services:
+          - type: web
+            name: costos_Backend
+            runtime: docker
+            repo: https://github.com/FritoMix/costos_Backend
+            plan: free
+            region: oregon
+            dockerContext: .
+            dockerfilePath: ./Dockerfile
+            healthCheckPath: /api/v1/salud
+            autoDeployTrigger: commit
+            envVars:
+              # Entorno real: desactiva /docs y activa la cookie Secure.
+              - key: APP_ENV
+                value: production
+              # Cadena de conexion de la base de Render (Internal Database
+              # URL). Tiene prioridad sobre las piezas POSTGRES_*.
+              - key: DATABASE_URL
+                sync: false
+              # Render genera un secreto la primera vez y lo mantiene.
+              - key: JWT_SECRET_KEY
+                generateValue: true
+              # Contrasena del administrador inicial. Se define en el panel.
+              - key: ADMIN_PASSWORD
+                sync: false
+              - key: TZ
+                value: America/Bogota
+              - key: RATE_LIMIT_MINUTE
+                value: 120/minute

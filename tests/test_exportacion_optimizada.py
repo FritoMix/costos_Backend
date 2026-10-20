@@ -40,7 +40,9 @@ def test_generar_csv_con_bom_y_delimitador():
             40.0,
         ],
     ]
-    csv_bytes = generar_csv(filas)
+    # generar_csv devuelve un generador de chunks (StreamingResponse):
+    # se unen aqui para poder validar el contenido completo.
+    csv_bytes = b"".join(generar_csv(filas))
     # Debe empezar con el BOM UTF-8 (\xef\xbb\xbf)
     assert csv_bytes.startswith(b"\xef\xbb\xbf")
     texto = csv_bytes.decode("utf-8-sig")
@@ -70,7 +72,8 @@ def test_generar_excel_bytes_validos():
             40.0,
         ],
     ]
-    excel_bytes = generar_excel(filas)
+    # Igual que el CSV: el router lo transmite por chunks.
+    excel_bytes = b"".join(generar_excel(filas))
     # El archivo Excel (.xlsx) es un zip que empieza con 'PK\x03\x04'
     assert excel_bytes.startswith(b"PK")
     assert len(excel_bytes) > 100
