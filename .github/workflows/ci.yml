@@ -14,6 +14,26 @@ jobs:
     name: Pruebas y lint
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: datacontrol_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d datacontrol_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Habilita las pruebas de tests/integration/. El fixture borra y
+      # recrea el schema public de esta base desechable.
+      TEST_DATABASE_URL: postgresql+psycopg://test:test@localhost:5432/datacontrol_test
+
     steps:
       - name: Descargar codigo
         uses: actions/checkout@v4
