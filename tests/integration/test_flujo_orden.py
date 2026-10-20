@@ -274,7 +274,8 @@ def test_numeracion_concurrente_no_repite(engine_integracion):
 
     def generar(_: int) -> str:
         with Session(engine_integracion) as sesion:
-            barrera.wait()
+            # timeout: si un hilo no llega, el test falla en vez de colgarse.
+            barrera.wait(timeout=15)
             numero = servicio_ordenes.generar_numero_orden(sesion, fecha)
             sesion.commit()
             return numero
