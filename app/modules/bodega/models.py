@@ -2,12 +2,17 @@
 Modulo Bodega - catalogo de referencias de papa.
 
 Una referencia describe la variedad o procedencia de la papa cruda que
-compra bodega. El peso promedio por bulto es el dato operativo: con el se
-calculan los kilos crudos de cada tanda de horno.
+compra bodega. Ademas del peso promedio por bulto, guarda los parametros
+productivos que usa el horno: rendimiento de fritura y participacion en la
+mezcla de produccion.
 
-El peso se copia al registro de horno en el momento de crear la tanda. Si
-bodega corrige el promedio despues, las ordenes historicas conservan el
-peso con el que realmente se calculo su produccion.
+Los tres valores (peso, rendimiento y participacion) se copian al registro
+de horno al crear la tanda. Si bodega los corrige despues, las tandas
+historicas conservan los valores con los que realmente se calcularon.
+
+Los campos nuevos son NULL para las referencias creadas antes de V9: no se
+inventan parametros historicos. El operario no puede usar una referencia
+incompleta hasta que Bodega la complete.
 """
 
 from datetime import datetime
@@ -24,10 +29,21 @@ class ReferenciaPapa(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     nombre: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    tipo: Mapped[str | None] = mapped_column(String(100), nullable=True)
     peso_promedio_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    # NULL solo en referencias historicas. Las nuevas exigen ambos valores.
+    rendimiento_fritura_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
+    porcentaje_produccion_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     fecha_creacion: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    fecha_actualizacion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     def __repr__(self) -> str:

@@ -63,9 +63,15 @@ def datos_base(db: Session) -> SimpleNamespace:
     sabor = Sabor(nombre="Natural de Prueba", activo=True)
     referencia_papa = ReferenciaPapa(
         nombre="Papa de Prueba",
+        tipo="Papa pareja",
         peso_promedio_bulto_kg=Decimal("50.00"),
+        rendimiento_fritura_pct=Decimal("25.00"),
+        porcentaje_produccion_pct=Decimal("100.00"),
         activo=True,
     )
+    # Horno de prueba con capacidad conocida para distribuir 50 bultos/hora.
+    # La migracion real deja los hornos existentes en NULL.
+    horno.capacidad_bultos_hora = Decimal("50.00")
 
     supervisor = _usuario("Supervisor de Prueba", "supervisor_prueba", roles[RolCodigo.SUPERVISOR])
     admin = _usuario("Admin de Prueba", "admin_prueba", roles[RolCodigo.ADMIN])

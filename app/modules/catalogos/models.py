@@ -78,6 +78,13 @@ class Horno(Base):
     # Informativo, para trazabilidad: que aceite usa este horno (ej: "LS").
     tipo_aceite: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # Cuantos bultos de papa cruda puede procesar en una hora. Se usa para
+    # proyectar la distribucion entre referencias; NULL en hornos historicos
+    # que todavia no tienen el dato confirmado por la planta.
+    capacidad_bultos_hora: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 2), nullable=True
+    )
+
     # Si el horno esta habilitado para ordenes de exportacion. Cuando una
     # orden es de exportacion, el horno elegido debe tener esto en True,
     # sin importar la categoria.

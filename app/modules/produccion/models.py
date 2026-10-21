@@ -201,9 +201,19 @@ class RegistroHorno(Base):
     referencia_papa: Mapped[ReferenciaPapa | None] = relationship(lazy="selectin")
 
     cantidad_bultos: Mapped[Decimal] = mapped_column(Numeric(6, 2))
-    # Copia del peso promedio vigente de la referencia al crear el registro.
+    # Copias congeladas de los parametros de la referencia al crear la tanda.
+    # Si bodega corrige la referencia despues, el historico no cambia.
     peso_estandar_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    rendimiento_fritura_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
+    porcentaje_produccion_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
     kg_crudos_calculados: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    kg_fritos_estimados: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
 
     operarios_seleccion: Mapped[int] = mapped_column(SmallInteger)
     operarios_horno: Mapped[int] = mapped_column(SmallInteger)

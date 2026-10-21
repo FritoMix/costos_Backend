@@ -5,7 +5,7 @@ Contratos de entrada y salida del modulo Catalogos.
 from datetime import date, time
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --- Catalogos simples (solo nombre + activo) ------------------------------
 
@@ -61,6 +61,7 @@ class HornoSalida(BaseModel):
     litros_por_cm_manual: Decimal | None
     # Calculado: lo que la app realmente usa para convertir cm a litros.
     litros_por_cm: Decimal | None
+    capacidad_bultos_hora: Decimal | None
     categorias: list[CatalogoSalida]
 
 
@@ -71,7 +72,28 @@ class HornoGuardar(BaseModel):
     apto_exportacion: bool = False
     tanque_diametro_cm: Decimal | None = Field(default=None, ge=0)
     litros_por_cm_manual: Decimal | None = Field(default=None, ge=0)
+    capacidad_bultos_hora: Decimal | None = Field(
+        default=None, gt=0, le=Decimal("9999.99")
+    )
     categoria_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("capacidad_bultos_hora")
+    @classmethod
+    def _capacidad_entera(cls, valor: Decimal | None) -> Decimal | None:
+        if valor is not None and valor != valor.to_integral_value():
+            raise ValueError("La capacidad debe ser un número entero de bultos por hora.")
+        return valor
+
+
+class HornoCapacidadGuardar(BaseModel):
+    capacidad_bultos_hora: Decimal = Field(gt=0, le=Decimal("9999.99"))
+
+    @field_validator("capacidad_bultos_hora")
+    @classmethod
+    def _capacidad_entera(cls, valor: Decimal) -> Decimal:
+        if valor != valor.to_integral_value():
+            raise ValueError("La capacidad debe ser un número entero de bultos por hora.")
+        return valor
 
 
 # --- Productos -------------------------------------------------------------

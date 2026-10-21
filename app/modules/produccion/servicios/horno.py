@@ -3,11 +3,12 @@ Logica de negocio del registro de horno (las tandas de fritura).
 
 Lo que calcula la app sola, para que el operario no tenga que hacerlo:
   kg crudos      = bultos x peso promedio de la referencia de papa elegida
+  kg fritos est. = kg crudos x rendimiento de fritura / 100
   litros aceite  = diferencia de nivel en cm x litros por cm del tanque
   kg de aceite   = litros x densidad vigente de ese horno en esa fecha
 
-El peso de la referencia se copia al registro: si bodega corrige el
-promedio despues, las tandas historicas no cambian.
+El peso, el rendimiento y la participacion de la referencia se copian al
+registro: si bodega los corrige despues, las tandas historicas no cambian.
 
 Si falta la calibracion del tanque o la densidad, esas columnas quedan
 vacias: el registro se guarda igual y no se inventa ningun valor.
@@ -26,6 +27,10 @@ from app.modules.bodega.service import obtener as obtener_referencia_papa
 from app.modules.catalogos.models import Horno, TipoDesperdicio
 from app.modules.catalogos.service import obtener_densidad_vigente
 from app.modules.identidad.models import RolCodigo, Usuario
+from app.modules.produccion.dominio.calculos import (
+    calcular_kg_crudos,
+    calcular_kg_fritos_estimados,
+)
 from app.modules.produccion.models import (
     Desperdicio,
     EstadoOrden,
@@ -108,8 +113,28 @@ def _aplicar_datos(
         raise ErrorDeValidacion(
             "La referencia de papa seleccionada está inactiva. Elige otra."
         )
+    parametros_incompletos = (
+        referencia.rendimiento_fritura_pct is None
+        or referencia.porcentaje_produccion_pct is None
+    )
+    # Las tandas NUEVAS exigen la referencia completa. Una tanda historica
+    # (ya tiene id) puede corregirse aunque su referencia sea anterior a V9:
+    # se conserva el rendimiento NULL y no se inventan kg fritos.
+    if parametros_incompletos and registro.id is None:
+        raise ErrorDeValidacion(
+            f'La referencia "{referencia.nombre}" todavía no tiene configurados el '
+            "rendimiento de fritura y la participación. Pídele a Bodega que complete "
+            "sus parámetros antes de registrar la tanda."
+        )
 
     peso_bulto = referencia.peso_promedio_bulto_kg
+    kg_crudos = calcular_kg_crudos(datos.cantidad_bultos, peso_bulto)
+    if referencia.rendimiento_fritura_pct is None:
+        kg_fritos = None
+    else:
+        kg_fritos = calcular_kg_fritos_estimados(
+            kg_crudos, referencia.rendimiento_fritura_pct
+        )
     _validar_niveles_aceite(datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm)
     diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
     litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
@@ -123,7 +148,10 @@ def _aplicar_datos(
     registro.referencia_papa = referencia
     registro.cantidad_bultos = datos.cantidad_bultos
     registro.peso_estandar_bulto_kg = peso_bulto
-    registro.kg_crudos_calculados = (datos.cantidad_bultos * peso_bulto).quantize(Decimal("0.01"))
+    registro.rendimiento_fritura_pct = referencia.rendimiento_fritura_pct
+    registro.porcentaje_produccion_pct = referencia.porcentaje_produccion_pct
+    registro.kg_crudos_calculados = kg_crudos
+    registro.kg_fritos_estimados = kg_fritos
     registro.operarios_seleccion = datos.operarios_seleccion
     registro.operarios_horno = datos.operarios_horno
     registro.nivel_aceite_inicial_cm = datos.nivel_aceite_inicial_cm

@@ -21,10 +21,11 @@ from app.modules.produccion.schemas import TotalesOrden
 
 
 def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:
-    kg_crudos, bultos, kg_aceite = db.execute(
+    kg_crudos, bultos, kg_fritos_estimados, kg_aceite = db.execute(
         select(
             func.coalesce(func.sum(RegistroHorno.kg_crudos_calculados), 0),
             func.coalesce(func.sum(RegistroHorno.cantidad_bultos), 0),
+            func.coalesce(func.sum(RegistroHorno.kg_fritos_estimados), 0),
             func.coalesce(func.sum(RegistroHorno.kg_aceite_consumido), 0),
         ).where(RegistroHorno.orden_id == orden.id, RegistroHorno.eliminado == False)
     ).one()
@@ -48,6 +49,7 @@ def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:
     return TotalesOrden(
         kg_crudos=kg_crudos,
         cantidad_bultos=bultos,
+        kg_fritos_estimados=kg_fritos_estimados,
         kg_papa_frita=kg_papa_frita,
         kg_aceite=kg_aceite,
         kg_desperdicio=kg_desperdicio,
