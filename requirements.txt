@@ -4,10 +4,10 @@
 # hoy y dentro de un ano, aunque salgan versiones nuevas.
 
 # --- Servidor web / API ---
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.1
+fastapi==0.156.2
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.16.1
 
 # --- Base de datos ---
 # El esquema lo maneja Flyway (backend/migraciones). SQLAlchemy solo lee y
@@ -21,10 +21,10 @@ psycopg[binary]==3.2.3
 
 # --- Seguridad ---
 bcrypt==4.2.1
-pyjwt==2.10.1
+pyjwt==2.15.1
 
 # --- Exportacion a Excel ---
 openpyxl==3.1.5
 
 # --- Limite de peticiones (rate limiting) ---
-slowapi==0.1.9
+slowapi==0.1.10

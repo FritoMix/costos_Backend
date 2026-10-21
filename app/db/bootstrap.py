@@ -84,6 +84,7 @@ def _tal_vez_restablecer_password(db: Session, usuario: Usuario) -> None:
 
     cambios: list[str] = []
     usuario.password_hash = hash_password(settings.admin_password)
+    usuario.token_version += 1
     cambios.append("contraseña")
     if not usuario.activo:
         usuario.activo = True

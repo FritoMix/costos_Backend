@@ -9,6 +9,9 @@ concurrency:
   group: backend-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   pruebas:
     name: Pruebas y lint
@@ -51,5 +54,8 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app tests
 
-      - name: Pruebas (pytest)
-        run: pytest tests/ -q
+      - name: Escaneo de dependencias (pip-audit)
+        run: pip-audit -r requirements.txt --strict
+
+      - name: Pruebas con cobertura (pytest)
+        run: pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=70

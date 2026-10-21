@@ -38,12 +38,15 @@ def test_un_hash_corrupto_no_revienta_la_app():
     assert verificar_password("clave", "esto-no-es-un-hash") is False
 
 
-def test_el_token_guarda_el_usuario_y_su_rol():
-    token, segundos = crear_token_acceso(usuario_id=7, rol="operario_horno")
+def test_el_token_guarda_el_usuario_su_rol_y_la_version_de_sesion():
+    token, segundos = crear_token_acceso(
+        usuario_id=7, rol="operario_horno", token_version=3
+    )
     contenido = leer_token_acceso(token)
 
     assert contenido["sub"] == "7"
     assert contenido["rol"] == "operario_horno"
+    assert contenido["tv"] == 3
     assert segundos > 0
 
 

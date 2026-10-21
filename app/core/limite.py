@@ -12,10 +12,14 @@ cuando la conexion viene de un proxy de la red interna: cualquiera puede
 inventar esa cabecera desde Internet.
 """
 
+import inspect
 from ipaddress import ip_address, ip_network
 
-from slowapi import Limiter
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.requests import Request
+from starlette.routing import Match
 
 from app.core.config import settings
 
@@ -68,3 +72,63 @@ def obtener_ip_cliente(request: Request) -> str:
 
 
 limiter = Limiter(key_func=obtener_ip_cliente, default_limits=[settings.rate_limit_minute])
+
+
+def buscar_handler(routes, scope) -> object | None:
+    """
+    Encuentra la funcion que atiende una peticion.
+
+    FastAPI 0.156 conserva los routers incluidos como ``_IncludedRouter`` en
+    ``app.routes`` en vez de aplanar todas las rutas. SlowAPI busca solo en
+    el primer nivel y por eso dejaba de aplicar los limites. Esta busqueda
+    entra recursivamente en ``original_router`` y descuenta el prefijo de
+    cada inclusion (/api/v1, /auth, ...).
+    """
+    for route in routes:
+        match, _ = route.matches(scope)
+        if match != Match.FULL:
+            continue
+
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is not None:
+            return endpoint
+
+        original = getattr(route, "original_router", None)
+        if original is None:
+            continue
+
+        contexto = getattr(route, "include_context", None)
+        prefijo = getattr(contexto, "prefix", "") or ""
+        ruta_hija = scope
+        if prefijo and scope["path"].startswith(prefijo):
+            ruta_hija = {**scope, "path": scope["path"][len(prefijo) :] or "/"}
+
+        encontrado = buscar_handler(original.routes, ruta_hija)
+        if encontrado is not None:
+            return encontrado
+
+    return None
+
+
+class MiddlewareLimite(SlowAPIMiddleware):
+    """Aplica el limite global y los limites por ruta con el router actual."""
+
+    async def dispatch(self, request: Request, call_next):
+        if not limiter.enabled:
+            return await call_next(request)
+
+        handler = buscar_handler(request.app.routes, request.scope)
+        try:
+            limiter._check_request_limit(request, handler, True)
+        except RateLimitExceeded as exc:
+            # Usa el mismo manejador que las rutas con @limiter.limit, para
+            # que el frontend reciba siempre el mismo JSON de error.
+            manejador = request.app.exception_handlers.get(RateLimitExceeded)
+            if manejador is None:
+                return _rate_limit_exceeded_handler(request, exc)
+            respuesta = manejador(request, exc)
+            if inspect.isawaitable(respuesta):
+                respuesta = await respuesta
+            return respuesta
+
+        return await call_next(request)

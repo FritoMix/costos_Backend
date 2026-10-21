@@ -79,6 +79,9 @@ def cambiar_password_propia(db: Session, usuario: Usuario, actual: str, nueva: s
     if actual == nueva:
         raise ErrorDeValidacion("La contraseña nueva debe ser diferente a la actual.")
     usuario.password_hash = hash_password(nueva)
+    # Invalida cualquier token emitido antes de este cambio. El router
+    # reemite uno nuevo para que la sesion actual siga funcionando.
+    usuario.token_version += 1
     db.commit()
 
 
@@ -125,9 +128,16 @@ def actualizar_usuario(db: Session, usuario_id: int, datos: UsuarioActualizar) -
     usuario.nombre_completo = datos.nombre_completo.strip()
     usuario.nombre_usuario = datos.nombre_usuario.strip().lower()
     usuario.rol_id = datos.rol_id
+
+    desactivando = usuario.activo and not datos.activo
+    cambio_password = bool(datos.password)
     usuario.activo = datos.activo
-    if datos.password:
+    if cambio_password:
         usuario.password_hash = hash_password(datos.password)
+    if cambio_password or desactivando:
+        # Cualquier cambio de credenciales o una desactivacion cierra las
+        # sesiones abiertas de ese usuario.
+        usuario.token_version += 1
 
     db.commit()
     db.refresh(usuario)
@@ -144,5 +154,6 @@ def eliminar_usuario(db: Session, usuario_id: int, eliminado_por: Usuario) -> No
         raise ErrorDeValidacion("No puedes eliminar tu propio usuario.")
 
     usuario.activo = False
+    usuario.token_version += 1
     marcar_eliminado_por(db, usuario, eliminado_por)
     db.commit()

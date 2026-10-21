@@ -17,13 +17,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy.exc import OperationalError
 
 from app.api.manejadores import registrar_manejadores
 from app.api.router import api_router
 from app.core.config import settings
-from app.core.limite import limiter
+from app.core.limite import MiddlewareLimite, limiter
 from app.db.bootstrap import crear_admin_inicial
 from app.db.migraciones import aplicar_migraciones_pendientes
 from app.db.session import SessionLocal, engine
@@ -144,7 +143,7 @@ app = FastAPI(
 
 # El limite de peticiones se aplica a toda la app.
 app.state.limiter = limiter
-app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(MiddlewareLimite)
 
 # El frontend Angular corre en otro origen (otro puerto), asi que hay que
 # autorizarlo explicitamente. La lista viene del .env.
