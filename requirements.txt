@@ -17,7 +17,7 @@ pydantic-settings==2.16.1
 # ni compilar nada): hay versiones para glibc (manylinux, en el CI) y para
 # musl (musllinux, en la imagen Alpine). Asi funciona igual en ambos.
 sqlalchemy==2.1.5
-psycopg[binary]==3.2.3
+psycopg[binary]==3.3.6
 
 # --- Seguridad ---
 bcrypt==5.0.0
