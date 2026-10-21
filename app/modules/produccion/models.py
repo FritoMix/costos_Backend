@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.modules.bodega.models import ReferenciaPapa  # noqa: F401  (relacion)
 from app.modules.catalogos.models import (  # noqa: F401  (necesarios para las relaciones)
     CategoriaProducto,
     Horno,
@@ -192,8 +193,15 @@ class RegistroHorno(Base):
     hora_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     hora_fin: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+    # Referencia de papa elegida por el operario. Puede quedar NULL solo en
+    # registros historicos creados antes de existir el catalogo de bodega.
+    referencia_papa_id: Mapped[int | None] = mapped_column(
+        ForeignKey("referencias_papa.id"), nullable=True
+    )
+    referencia_papa: Mapped[ReferenciaPapa | None] = relationship(lazy="selectin")
+
     cantidad_bultos: Mapped[Decimal] = mapped_column(Numeric(6, 2))
-    # Copia del valor de configuracion vigente al crear el registro.
+    # Copia del peso promedio vigente de la referencia al crear el registro.
     peso_estandar_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
     kg_crudos_calculados: Mapped[Decimal] = mapped_column(Numeric(10, 2))
 

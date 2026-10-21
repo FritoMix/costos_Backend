@@ -2,9 +2,12 @@
 Logica de negocio del registro de horno (las tandas de fritura).
 
 Lo que calcula la app sola, para que el operario no tenga que hacerlo:
-  kg crudos      = bultos x peso estandar del bulto (copiado al registro)
+  kg crudos      = bultos x peso promedio de la referencia de papa elegida
   litros aceite  = diferencia de nivel en cm x litros por cm del tanque
   kg de aceite   = litros x densidad vigente de ese horno en esa fecha
+
+El peso de la referencia se copia al registro: si bodega corrige el
+promedio despues, las tandas historicas no cambian.
 
 Si falta la calibracion del tanque o la densidad, esas columnas quedan
 vacias: el registro se guarda igual y no se inventa ningun valor.
@@ -19,8 +22,9 @@ from sqlalchemy.orm import Session
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
 from app.core.tiempo import combinar_fecha_y_hora
+from app.modules.bodega.service import obtener as obtener_referencia_papa
 from app.modules.catalogos.models import Horno, TipoDesperdicio
-from app.modules.catalogos.service import obtener_densidad_vigente, obtener_peso_estandar_bulto
+from app.modules.catalogos.service import obtener_densidad_vigente
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.models import (
     Desperdicio,
@@ -99,7 +103,13 @@ def _validar_niveles_aceite(inicial: Decimal, final: Decimal) -> None:
 def _aplicar_datos(
     db: Session, registro: RegistroHorno, orden: OrdenProduccion, datos: RegistroHornoGuardar
 ) -> None:
-    peso_bulto = obtener_peso_estandar_bulto(db)
+    referencia = obtener_referencia_papa(db, datos.referencia_papa_id)
+    if not referencia.activo and referencia.id != registro.referencia_papa_id:
+        raise ErrorDeValidacion(
+            "La referencia de papa seleccionada está inactiva. Elige otra."
+        )
+
+    peso_bulto = referencia.peso_promedio_bulto_kg
     _validar_niveles_aceite(datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm)
     diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
     litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
@@ -109,6 +119,8 @@ def _aplicar_datos(
 
     registro.hora_inicio = inicio
     registro.hora_fin = fin
+    registro.referencia_papa_id = referencia.id
+    registro.referencia_papa = referencia
     registro.cantidad_bultos = datos.cantidad_bultos
     registro.peso_estandar_bulto_kg = peso_bulto
     registro.kg_crudos_calculados = (datos.cantidad_bultos * peso_bulto).quantize(Decimal("0.01"))

@@ -30,6 +30,7 @@ TABLAS_ESPERADAS = {
     "registro_saborizado",
     "canastillas",
     "notificaciones",
+    "referencias_papa",
 }
 
 
@@ -44,7 +45,13 @@ def test_esquema_y_datos_iniciales(engine_integracion):
         hornos = set(conexion.scalars(text("SELECT nombre FROM hornos")))
 
     assert TABLAS_ESPERADAS <= tablas
-    assert roles == {"admin", "supervisor", "operario_horno", "operario_saborizado"}
+    assert roles == {
+        "admin",
+        "supervisor",
+        "operario_horno",
+        "operario_saborizado",
+        "bodeguero",
+    }
     assert hornos == {"Horno 1", "Horno 2"}
 
 

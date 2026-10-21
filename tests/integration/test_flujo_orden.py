@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errores import ErrorDeValidacion
 from app.core.tiempo import hoy_local
+from app.modules.bodega import service as servicio_bodega
 from app.modules.produccion.models import (
     DestinoOrden,
     EstadoOrden,
@@ -55,6 +56,7 @@ def _registro_horno(**cambios) -> RegistroHornoGuardar:
     base = dict(
         hora_inicio=time(6, 0),
         hora_fin=time(7, 0),
+        referencia_papa_id=1,
         cantidad_bultos=Decimal("10"),
         operarios_seleccion=2,
         operarios_horno=1,
@@ -148,7 +150,10 @@ def test_borrado_suave_arrastra_registros_y_sale_de_los_totales(
     servicio_ordenes.iniciar_orden(db, orden)
 
     registro = servicio_horno.crear_registro(
-        db, orden, _registro_horno(), datos_base.operario_horno
+        db,
+        orden,
+        _registro_horno(referencia_papa_id=datos_base.referencia_papa.id),
+        datos_base.operario_horno,
     )
     recepcion = servicio_saborizado.crear_recepcion(
         db, orden, _recepcion(datos_base), datos_base.operario_saborizado
@@ -223,6 +228,72 @@ def test_no_se_puede_editar_una_orden_finalizada(db, datos_base, orden_guardar):
         )
 
 
+def test_la_tanda_usa_y_copia_el_peso_de_la_referencia(db, datos_base, orden_guardar):
+    orden = servicio_ordenes.crear_orden(
+        db, orden_guardar(), datos_base.supervisor
+    )
+    servicio_ordenes.iniciar_orden(db, orden)
+
+    referencia = datos_base.referencia_papa
+    referencia.peso_promedio_bulto_kg = Decimal("48.00")
+    db.flush()
+
+    registro = servicio_horno.crear_registro(
+        db, orden, _registro_horno(referencia_papa_id=referencia.id),
+        datos_base.operario_horno,
+    )
+
+    assert registro.referencia_papa_id == referencia.id
+    assert registro.peso_estandar_bulto_kg == Decimal("48.00")
+    assert registro.kg_crudos_calculados == Decimal("480.00")
+
+    # Un cambio posterior en bodega no reescribe la tanda ya guardada.
+    referencia.peso_promedio_bulto_kg = Decimal("45.00")
+    db.flush()
+    db.refresh(registro)
+
+    assert registro.peso_estandar_bulto_kg == Decimal("48.00")
+    assert registro.kg_crudos_calculados == Decimal("480.00")
+
+
+def test_no_se_elimina_una_referencia_que_ya_tiene_tandas(
+    db, datos_base, orden_guardar
+):
+    orden = servicio_ordenes.crear_orden(
+        db, orden_guardar(), datos_base.supervisor
+    )
+    servicio_ordenes.iniciar_orden(db, orden)
+    servicio_horno.crear_registro(
+        db,
+        orden,
+        _registro_horno(referencia_papa_id=datos_base.referencia_papa.id),
+        datos_base.operario_horno,
+    )
+
+    with pytest.raises(ErrorDeValidacion, match="desactivarla"):
+        servicio_bodega.eliminar(db, datos_base.referencia_papa.id)
+
+
+def test_una_referencia_inactiva_no_se_puede_usar_en_una_tanda_nueva(
+    db, datos_base, orden_guardar
+):
+    orden = servicio_ordenes.crear_orden(
+        db, orden_guardar(), datos_base.supervisor
+    )
+    servicio_ordenes.iniciar_orden(db, orden)
+
+    datos_base.referencia_papa.activo = False
+    db.flush()
+
+    with pytest.raises(ErrorDeValidacion, match="inactiva"):
+        servicio_horno.crear_registro(
+            db,
+            orden,
+            _registro_horno(referencia_papa_id=datos_base.referencia_papa.id),
+            datos_base.operario_horno,
+        )
+
+
 def test_el_desperdicio_se_refleja_en_los_totales(db, datos_base, orden_guardar):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
@@ -233,6 +304,7 @@ def test_el_desperdicio_se_refleja_en_los_totales(db, datos_base, orden_guardar)
         db,
         orden,
         _registro_horno(
+            referencia_papa_id=datos_base.referencia_papa.id,
             tipo_desperdicio_id=datos_base.tipo_desperdicio.id,
             cantidad_desperdicio_kg=Decimal("2.50"),
         ),
