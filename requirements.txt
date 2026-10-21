@@ -20,7 +20,7 @@ sqlalchemy==2.0.36
 psycopg[binary]==3.2.3
 
 # --- Seguridad ---
-bcrypt==4.2.1
+bcrypt==5.0.0
 pyjwt==2.15.1
 
 # --- Exportacion a Excel ---
