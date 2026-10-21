@@ -19,6 +19,7 @@ from app.modules.catalogos.schemas import (
     ConfiguracionGuardar,
     ConfiguracionSalida,
     DensidadVigenteSalida,
+    HornoCapacidadGuardar,
     HornoGuardar,
     HornoSalida,
     MuestraDensidadCrear,
@@ -33,6 +34,10 @@ from app.modules.identidad.models import RolCodigo, Usuario
 
 BD = Annotated[Session, Depends(get_db)]
 SoloAdmin = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN))]
+GestionaCapacidadHorno = Annotated[
+    Usuario,
+    Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.SUPERVISOR)),
+]
 # Los catalogos transversales son para produccion y administracion. Bodega
 # solo usa su propio catalogo de referencias de papa.
 VeCatalogos = Annotated[
@@ -158,6 +163,15 @@ def crear_horno(datos: HornoGuardar, db: BD, _: SoloAdmin):
 @router.put("/hornos/{horno_id}", response_model=HornoSalida)
 def actualizar_horno(horno_id: int, datos: HornoGuardar, db: BD, _: SoloAdmin):
     return service.actualizar_horno(db, horno_id, datos)
+
+
+@router.patch("/hornos/{horno_id}/capacidad", response_model=HornoSalida)
+def actualizar_capacidad_horno(
+    horno_id: int, datos: HornoCapacidadGuardar, db: BD, _: GestionaCapacidadHorno
+):
+    return service.actualizar_capacidad_horno(
+        db, horno_id, datos.capacidad_bultos_hora
+    )
 
 
 @router.delete("/hornos/{horno_id}", status_code=status.HTTP_204_NO_CONTENT)

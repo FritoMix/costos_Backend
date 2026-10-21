@@ -289,6 +289,11 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
     horno.apto_exportacion = datos.apto_exportacion
     horno.tanque_diametro_cm = datos.tanque_diametro_cm
     horno.litros_por_cm_manual = datos.litros_por_cm_manual
+    # En una actualizacion, un cliente viejo puede omitir el campo. En ese
+    # caso se conserva la capacidad ya configurada; un NULL explicito la
+    # borra (solo Administracion puede hacerlo desde la API).
+    if "capacidad_bultos_hora" in datos.model_fields_set:
+        horno.capacidad_bultos_hora = datos.capacidad_bultos_hora
 
     categorias = []
     for categoria_id in datos.categoria_ids:
@@ -313,6 +318,16 @@ def actualizar_horno(db: Session, horno_id: int, datos: HornoGuardar) -> Horno:
     horno = obtener_horno(db, horno_id)
     _nombre_libre(db, Horno, Horno.nombre, datos.nombre.strip(), horno_id)
     _aplicar_datos_horno(db, horno, datos)
+    db.commit()
+    db.refresh(horno)
+    return horno
+
+
+def actualizar_capacidad_horno(
+    db: Session, horno_id: int, capacidad_bultos_hora: Decimal
+) -> Horno:
+    horno = obtener_horno(db, horno_id)
+    horno.capacidad_bultos_hora = capacidad_bultos_hora
     db.commit()
     db.refresh(horno)
     return horno

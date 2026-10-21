@@ -162,6 +162,7 @@ def test_borrado_suave_arrastra_registros_y_sale_de_los_totales(
     totales = calcular_totales(db, orden)
     assert totales.kg_crudos == Decimal("500.00")
     assert totales.cantidad_bultos == Decimal("10.00")
+    assert totales.kg_fritos_estimados == Decimal("125.00")
     assert totales.kg_papa_frita == Decimal("11.50")
 
     arrastrados = servicio_ordenes.eliminar_orden(db, orden, datos_base.admin)
@@ -228,7 +229,9 @@ def test_no_se_puede_editar_una_orden_finalizada(db, datos_base, orden_guardar):
         )
 
 
-def test_la_tanda_usa_y_copia_el_peso_de_la_referencia(db, datos_base, orden_guardar):
+def test_la_tanda_usa_y_congela_los_parametros_de_la_referencia(
+    db, datos_base, orden_guardar
+):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
@@ -245,15 +248,79 @@ def test_la_tanda_usa_y_copia_el_peso_de_la_referencia(db, datos_base, orden_gua
 
     assert registro.referencia_papa_id == referencia.id
     assert registro.peso_estandar_bulto_kg == Decimal("48.00")
+    assert registro.rendimiento_fritura_pct == Decimal("25.00")
+    assert registro.porcentaje_produccion_pct == Decimal("100.00")
     assert registro.kg_crudos_calculados == Decimal("480.00")
+    assert registro.kg_fritos_estimados == Decimal("120.00")
 
     # Un cambio posterior en bodega no reescribe la tanda ya guardada.
     referencia.peso_promedio_bulto_kg = Decimal("45.00")
+    referencia.rendimiento_fritura_pct = Decimal("30.00")
     db.flush()
     db.refresh(registro)
 
     assert registro.peso_estandar_bulto_kg == Decimal("48.00")
+    assert registro.rendimiento_fritura_pct == Decimal("25.00")
     assert registro.kg_crudos_calculados == Decimal("480.00")
+    assert registro.kg_fritos_estimados == Decimal("120.00")
+
+
+def test_una_referencia_historica_sin_parametros_no_se_usa_en_tandas_nuevas(
+    db, datos_base, orden_guardar
+):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    servicio_ordenes.iniciar_orden(db, orden)
+
+    referencia = datos_base.referencia_papa
+    referencia.rendimiento_fritura_pct = None
+    referencia.porcentaje_produccion_pct = None
+    db.flush()
+
+    with pytest.raises(ErrorDeValidacion, match="todavía no tiene configurados"):
+        servicio_horno.crear_registro(
+            db,
+            orden,
+            _registro_horno(referencia_papa_id=referencia.id),
+            datos_base.operario_horno,
+        )
+
+
+def test_una_tanda_historica_sin_rendimiento_se_puede_corregir(
+    db, datos_base, orden_guardar
+):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    servicio_ordenes.iniciar_orden(db, orden)
+    referencia = datos_base.referencia_papa
+    registro = servicio_horno.crear_registro(
+        db,
+        orden,
+        _registro_horno(referencia_papa_id=referencia.id),
+        datos_base.operario_horno,
+    )
+
+    # Simula un registro anterior a V9: la referencia nunca tuvo rendimiento
+    # ni participacion y la tanda no guardo esos snapshots.
+    referencia.rendimiento_fritura_pct = None
+    referencia.porcentaje_produccion_pct = None
+    registro.rendimiento_fritura_pct = None
+    registro.porcentaje_produccion_pct = None
+    registro.kg_fritos_estimados = None
+    db.flush()
+
+    corregido = servicio_horno.editar_registro(
+        db,
+        registro,
+        _registro_horno(
+            referencia_papa_id=referencia.id,
+            cantidad_bultos=Decimal("12.00"),
+        ),
+        datos_base.operario_horno,
+    )
+
+    assert corregido.kg_crudos_calculados == Decimal("600.00")
+    assert corregido.rendimiento_fritura_pct is None
+    assert corregido.porcentaje_produccion_pct is None
+    assert corregido.kg_fritos_estimados is None
 
 
 def test_no_se_elimina_una_referencia_que_ya_tiene_tandas(

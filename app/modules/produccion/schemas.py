@@ -29,7 +29,10 @@ class ReferenciaPapaRef(BaseModel):
 
     id: int
     nombre: str
+    tipo: str | None
     peso_promedio_bulto_kg: Decimal
+    rendimiento_fritura_pct: Decimal | None
+    porcentaje_produccion_pct: Decimal | None
 
 
 class UsuarioRef(BaseModel):
@@ -105,7 +108,10 @@ class RegistroHornoSalida(BaseModel):
     referencia_papa: ReferenciaPapaRef | None
     cantidad_bultos: Decimal
     peso_estandar_bulto_kg: Decimal
+    rendimiento_fritura_pct: Decimal | None
+    porcentaje_produccion_pct: Decimal | None
     kg_crudos_calculados: Decimal
+    kg_fritos_estimados: Decimal | None
     operarios_seleccion: int
     operarios_horno: int
     nivel_aceite_inicial_cm: Decimal
@@ -189,6 +195,7 @@ class RecepcionGuardar(BaseModel):
 class TotalesOrden(BaseModel):
     kg_crudos: Decimal
     cantidad_bultos: Decimal
+    kg_fritos_estimados: Decimal
     kg_papa_frita: Decimal
     kg_aceite: Decimal
     kg_desperdicio: Decimal

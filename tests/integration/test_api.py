@@ -7,6 +7,7 @@ sesion de la prueba (con savepoints) para que cada caso quede aislado.
 """
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,43 +205,79 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     _login(cliente)
     _json(cliente.get(f"{API}/bodega/referencias-papa"))
 
+    payload = {
+        "nombre": "Papa API",
+        "tipo": "Papa lavada",
+        "peso_promedio_bulto_kg": "48.50",
+        "rendimiento_fritura_pct": "24.50",
+        "porcentaje_produccion_pct": "33.33",
+    }
     creada = _json(
-        cliente.post(
-            f"{API}/bodega/referencias-papa",
-            json={"nombre": "Papa API", "peso_promedio_bulto_kg": "48.50"},
-        ),
+        cliente.post(f"{API}/bodega/referencias-papa", json=payload),
         201,
     )
     assert creada["peso_promedio_bulto_kg"] == "48.50"
+    assert creada["tipo"] == "Papa lavada"
+    assert creada["rendimiento_fritura_pct"] == "24.5000"
+    assert creada["porcentaje_produccion_pct"] == "33.3300"
+    assert creada["fecha_actualizacion"]
     _json(cliente.get(f"{API}/bodega/referencias-papa/{creada['id']}"))
     _json(cliente.get(f"{API}/bodega/referencias-papa?solo_activas=true"))
 
+    # Nombre duplicado sin importar mayusculas.
     assert cliente.post(
         f"{API}/bodega/referencias-papa",
-        json={"nombre": "papa api", "peso_promedio_bulto_kg": "50"},
+        json={**payload, "nombre": "papa api"},
     ).status_code == 400
-    assert cliente.post(
-        f"{API}/bodega/referencias-papa",
-        json={"nombre": "   ", "peso_promedio_bulto_kg": "50"},
-    ).status_code == 400
+    # Valores fuera de rango: los rechaza el contrato con un mensaje legible.
+    for cambio in (
+        {"tipo": "   "},
+        {"rendimiento_fritura_pct": "0"},
+        {"rendimiento_fritura_pct": "101"},
+        {"porcentaje_produccion_pct": "-1"},
+        {"porcentaje_produccion_pct": "100.01"},
+        {"peso_promedio_bulto_kg": "0"},
+    ):
+        respuesta = cliente.post(
+            f"{API}/bodega/referencias-papa", json={**payload, **cambio}
+        )
+        assert respuesta.status_code == 422, respuesta.text
+        assert "IntegrityError" not in respuesta.text
+        assert "Traceback" not in respuesta.text
 
     actualizada = _json(
         cliente.put(
             f"{API}/bodega/referencias-papa/{creada['id']}",
             json={
+                **payload,
                 "nombre": "Papa API corregida",
+                "tipo": "Papa pareja",
                 "peso_promedio_bulto_kg": "49.25",
+                "rendimiento_fritura_pct": "26.75",
+                "porcentaje_produccion_pct": "50",
                 "activo": False,
             },
         )
     )
     assert actualizada["activo"] is False
+    assert actualizada["tipo"] == "Papa pareja"
+
+    # El Supervisor tambien administra el catalogo.
+    supervisor = TestClient(app)
+    _login(supervisor, "supervisor_prueba")
+    creada_supervisor = _json(
+        supervisor.post(
+            f"{API}/bodega/referencias-papa",
+            json={**payload, "nombre": "Papa del supervisor"},
+        ),
+        201,
+    )
+    supervisor.close()
 
     # El bodeguero gestiona su catalogo, pero no los demas modulos.
     bodeguero = TestClient(app)
     _login(bodeguero, "bodeguero_prueba")
     _json(bodeguero.get(f"{API}/bodega/referencias-papa"))
-    # Bodega no entra a la operacion ni a la administracion del sistema.
     for ruta in (
         "/ordenes",
         "/catalogos/productos",
@@ -251,7 +288,7 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     creada_bodeguero = _json(
         bodeguero.post(
             f"{API}/bodega/referencias-papa",
-            json={"nombre": "Papa del bodeguero", "peso_promedio_bulto_kg": "52"},
+            json={**payload, "nombre": "Papa del bodeguero", "porcentaje_produccion_pct": "16.67"},
         ),
         201,
     )
@@ -266,17 +303,160 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     _json(operario.get(f"{API}/bodega/referencias-papa"))
     assert operario.post(
         f"{API}/bodega/referencias-papa",
-        json={"nombre": "No permitido", "peso_promedio_bulto_kg": "50"},
+        json={**payload, "nombre": "No permitido"},
     ).status_code == 403
     operario.close()
 
-    assert cliente.delete(
-        f"{API}/bodega/referencias-papa/{creada['id']}"
-    ).status_code == 204
-    assert cliente.delete(
-        f"{API}/bodega/referencias-papa/{creada_bodeguero['id']}"
-    ).status_code == 204
+    for referencia_id in (
+        creada["id"],
+        creada_supervisor["id"],
+        creada_bodeguero["id"],
+    ):
+        assert cliente.delete(
+            f"{API}/bodega/referencias-papa/{referencia_id}"
+        ).status_code == 204
 
+
+def test_proyeccion_distribuye_capacidad_y_valida_porcentajes(
+    cliente: TestClient, db: Session, datos_base
+):
+    from app.modules.bodega.models import ReferenciaPapa
+
+    _login(cliente)
+    # La referencia del fixture queda con 66,67 % y se agrega otra con 33,33 %.
+    datos_base.referencia_papa.porcentaje_produccion_pct = Decimal("66.67")
+    otra = ReferenciaPapa(
+        nombre="Papa Proyeccion",
+        tipo="Papa lavada",
+        peso_promedio_bulto_kg=Decimal("50.00"),
+        rendimiento_fritura_pct=Decimal("25.00"),
+        porcentaje_produccion_pct=Decimal("33.33"),
+        activo=True,
+    )
+    db.add(otra)
+    db.flush()
+
+    proyeccion = _json(
+        cliente.get(
+            f"{API}/bodega/proyeccion",
+            params={"horno_id": datos_base.horno.id},
+        )
+    )
+    assert proyeccion["total_bultos"] == 50
+    assert proyeccion["total_kg_crudos"] == "2500.00"
+    assert proyeccion["total_kg_fritos_estimados"] == "625.00"
+    assert {fila["nombre"]: fila["bultos"] for fila in proyeccion["referencias"]} == {
+        "Papa de Prueba": 33,
+        "Papa Proyeccion": 17,
+    }
+
+    # 2 horas duplican la capacidad, no cambian el reparto porcentual.
+    proyeccion_2h = _json(
+        cliente.get(
+            f"{API}/bodega/proyeccion",
+            params={"horno_id": datos_base.horno.id, "horas": 2},
+        )
+    )
+    assert proyeccion_2h["total_bultos"] == 100
+    assert proyeccion_2h["total_kg_crudos"] == "5000.00"
+
+    # Una referencia activa incompleta tampoco se proyecta.
+    otra.tipo = None
+    db.flush()
+    respuesta = cliente.get(
+        f"{API}/bodega/proyeccion",
+        params={"horno_id": datos_base.horno.id},
+    )
+    assert respuesta.status_code == 400
+    assert "está incompleta" in respuesta.json()["detail"]
+    otra.tipo = "Papa lavada"
+    db.flush()
+
+    # Una configuracion inconsistente se bloquea con mensaje funcional.
+    datos_base.referencia_papa.porcentaje_produccion_pct = Decimal("50")
+    db.flush()
+    respuesta = cliente.get(
+        f"{API}/bodega/proyeccion",
+        params={"horno_id": datos_base.horno.id},
+    )
+    assert respuesta.status_code == 400
+    assert "debe sumar 100" in respuesta.json()["detail"]
+    assert "Traceback" not in respuesta.text
+
+    # El operario no proyecta.
+    operario = TestClient(app)
+    _login(operario, "operario_horno_prueba")
+    assert operario.get(
+        f"{API}/bodega/proyeccion", params={"horno_id": datos_base.horno.id}
+    ).status_code == 403
+    operario.close()
+
+    # El Bodeguero administra referencias, pero la proyeccion es de
+    # Administracion/Supervision.
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+    assert bodeguero.get(
+        f"{API}/bodega/proyeccion", params={"horno_id": datos_base.horno.id}
+    ).status_code == 403
+    bodeguero.close()
+
+    # Sin capacidad configurada no hay proyeccion posible.
+    datos_base.horno.capacidad_bultos_hora = None
+    db.flush()
+    respuesta = cliente.get(
+        f"{API}/bodega/proyeccion",
+        params={"horno_id": datos_base.horno.id},
+    )
+    assert respuesta.status_code == 400
+    assert "no tiene configurada su capacidad" in respuesta.json()["detail"]
+
+
+def test_capacidad_de_horno_la_configura_admin_o_supervisor(
+    cliente: TestClient, db: Session, datos_base
+):
+    from app.modules.catalogos.models import Horno
+
+    _login(cliente)
+    horno = db.get(Horno, datos_base.horno.id)
+    horno.capacidad_bultos_hora = None
+    db.flush()
+
+    respuesta = cliente.patch(
+        f"{API}/catalogos/hornos/{horno.id}/capacidad",
+        json={"capacidad_bultos_hora": "50"},
+    )
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["capacidad_bultos_hora"] == "50.00"
+
+    assert cliente.patch(
+        f"{API}/catalogos/hornos/{horno.id}/capacidad",
+        json={"capacidad_bultos_hora": "50.5"},
+    ).status_code == 422
+    assert cliente.patch(
+        f"{API}/catalogos/hornos/{horno.id}/capacidad",
+        json={"capacidad_bultos_hora": "0"},
+    ).status_code == 422
+
+    supervisor = TestClient(app)
+    _login(supervisor, "supervisor_prueba")
+    assert supervisor.patch(
+        f"{API}/catalogos/hornos/{horno.id}/capacidad",
+        json={"capacidad_bultos_hora": "60"},
+    ).status_code == 200
+    # El Supervisor no puede cambiar el resto de la configuracion del horno.
+    assert supervisor.put(
+        f"{API}/catalogos/hornos/{horno.id}",
+        json={"nombre": "Horno cambiado por supervisor"},
+    ).status_code == 403
+    supervisor.close()
+
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+    assert bodeguero.patch(
+        f"{API}/catalogos/hornos/{horno.id}/capacidad",
+        json={"capacidad_bultos_hora": "70"},
+    ).status_code == 403
+    bodeguero.close()
 
 def test_usuarios_crud_y_permisos(cliente: TestClient, datos_base):
     _login(cliente)
