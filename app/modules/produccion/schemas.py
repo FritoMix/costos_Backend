@@ -24,6 +24,14 @@ class ProductoRef(BaseModel):
     nombre_comercial: str
 
 
+class ReferenciaPapaRef(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nombre: str
+    peso_promedio_bulto_kg: Decimal
+
+
 class UsuarioRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -94,6 +102,7 @@ class RegistroHornoSalida(BaseModel):
     orden_id: int
     hora_inicio: datetime
     hora_fin: datetime
+    referencia_papa: ReferenciaPapaRef | None
     cantidad_bultos: Decimal
     peso_estandar_bulto_kg: Decimal
     kg_crudos_calculados: Decimal
@@ -118,6 +127,7 @@ class RegistroHornoGuardar(BaseModel):
     # el usuario sale del token. Al operario no se le pide ni una ni otro.
     hora_inicio: time
     hora_fin: time
+    referencia_papa_id: int = Field(gt=0)
     cantidad_bultos: Decimal = Field(gt=0)
     operarios_seleccion: int = Field(ge=0, le=999)
     operarios_horno: int = Field(ge=0, le=999)

@@ -12,7 +12,7 @@ from app.db.base import Base
 
 class RolCodigo:
     """
-    Codigos fijos de los cuatro roles. Se usan para verificar permisos, en
+    Codigos fijos de los cinco roles. Se usan para verificar permisos, en
     vez de escribir el texto "admin" suelto por todo el codigo.
     """
 
@@ -20,8 +20,15 @@ class RolCodigo:
     SUPERVISOR = "supervisor"
     OPERARIO_HORNO = "operario_horno"
     OPERARIO_SABORIZADO = "operario_saborizado"
+    BODEGUERO = "bodeguero"
 
-    TODOS = (ADMIN, SUPERVISOR, OPERARIO_HORNO, OPERARIO_SABORIZADO)
+    TODOS = (
+        ADMIN,
+        SUPERVISOR,
+        OPERARIO_HORNO,
+        OPERARIO_SABORIZADO,
+        BODEGUERO,
+    )
 
 
 class Rol(Base):

@@ -1,7 +1,7 @@
 """
 Rutas HTTP del modulo Catalogos: /api/v1/catalogos/...
 
-Leer los catalogos lo puede hacer cualquier usuario conectado (los
+Leer los catalogos lo pueden hacer los roles de produccion (los
 formularios de ordenes y registros necesitan las listas). Crear, editar y
 borrar es exclusivo del Administrador.
 """
@@ -28,11 +28,24 @@ from app.modules.catalogos.schemas import (
     TurnoGuardar,
     TurnoSalida,
 )
-from app.modules.identidad.dependencias import UsuarioAutenticado, requiere_roles
+from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 
 BD = Annotated[Session, Depends(get_db)]
 SoloAdmin = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN))]
+# Los catalogos transversales son para produccion y administracion. Bodega
+# solo usa su propio catalogo de referencias de papa.
+VeCatalogos = Annotated[
+    Usuario,
+    Depends(
+        requiere_roles(
+            RolCodigo.ADMIN,
+            RolCodigo.SUPERVISOR,
+            RolCodigo.OPERARIO_HORNO,
+            RolCodigo.OPERARIO_SABORIZADO,
+        )
+    ),
+]
 
 router = APIRouter(prefix="/catalogos", tags=["Catálogos"])
 
@@ -41,7 +54,7 @@ router = APIRouter(prefix="/catalogos", tags=["Catálogos"])
 
 
 @router.get("/categorias", response_model=list[CatalogoSalida])
-def listar_categorias(db: BD, _: UsuarioAutenticado, solo_activas: bool = False):
+def listar_categorias(db: BD, _: VeCatalogos, solo_activas: bool = False):
     return service.listar_categorias(db, solo_activas)
 
 
@@ -64,7 +77,7 @@ def eliminar_categoria(categoria_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/sabores", response_model=list[CatalogoSalida])
-def listar_sabores(db: BD, _: UsuarioAutenticado, solo_activos: bool = False):
+def listar_sabores(db: BD, _: VeCatalogos, solo_activos: bool = False):
     return service.listar_sabores(db, solo_activos)
 
 
@@ -87,7 +100,7 @@ def eliminar_sabor(sabor_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/tipos-desperdicio", response_model=list[CatalogoSalida])
-def listar_tipos_desperdicio(db: BD, _: UsuarioAutenticado, solo_activos: bool = False):
+def listar_tipos_desperdicio(db: BD, _: VeCatalogos, solo_activos: bool = False):
     return service.listar_tipos_desperdicio(db, solo_activos)
 
 
@@ -110,7 +123,7 @@ def eliminar_tipo_desperdicio(tipo_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/turnos", response_model=list[TurnoSalida])
-def listar_turnos(db: BD, _: UsuarioAutenticado, solo_activos: bool = False):
+def listar_turnos(db: BD, _: VeCatalogos, solo_activos: bool = False):
     return service.listar_turnos(db, solo_activos)
 
 
@@ -133,7 +146,7 @@ def eliminar_turno(turno_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/hornos", response_model=list[HornoSalida])
-def listar_hornos(db: BD, _: UsuarioAutenticado, solo_activos: bool = False):
+def listar_hornos(db: BD, _: VeCatalogos, solo_activos: bool = False):
     return service.listar_hornos(db, solo_activos)
 
 
@@ -156,7 +169,7 @@ def eliminar_horno(horno_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/productos", response_model=list[ProductoSalida])
-def listar_productos(db: BD, _: UsuarioAutenticado, solo_activos: bool = False):
+def listar_productos(db: BD, _: VeCatalogos, solo_activos: bool = False):
     return service.listar_productos(db, solo_activos)
 
 
@@ -179,7 +192,7 @@ def eliminar_producto(producto_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/configuracion", response_model=ConfiguracionSalida)
-def ver_configuracion(db: BD, _: UsuarioAutenticado):
+def ver_configuracion(db: BD, _: VeCatalogos):
     return service.obtener_configuracion(db)
 
 

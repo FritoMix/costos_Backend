@@ -10,8 +10,8 @@ Quien puede hacer que:
   * Registrar tandas de horno: Operario de Horno.
   * Registrar recepciones de saborizado: Operario de Saborizado.
   * Eliminar (borrado suave): solo Administrador.
-Ver las ordenes lo puede hacer cualquier usuario conectado: los operarios
-necesitan ver cuales estan En produccion.
+Ver las ordenes lo pueden hacer los roles de produccion: administrador,
+supervisor y operarios. Bodega no consulta ordenes ni sus registros.
 """
 
 from typing import Annotated
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errores import PermisoDenegado
 from app.db.session import get_db
-from app.modules.identidad.dependencias import UsuarioAutenticado, requiere_roles
+from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.schemas import (
     OrdenDetalle,
@@ -43,6 +43,19 @@ Supervisa = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo
 OperarioHorno = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.OPERARIO_HORNO))]
 OperarioSaborizado = Annotated[
     Usuario, Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.OPERARIO_SABORIZADO))
+]
+# Consultar ordenes, tandas y recepciones. Bodega queda fuera: su unica
+# pantalla operativa es el catalogo de referencias de papa.
+VeOrdenes = Annotated[
+    Usuario,
+    Depends(
+        requiere_roles(
+            RolCodigo.ADMIN,
+            RolCodigo.SUPERVISOR,
+            RolCodigo.OPERARIO_HORNO,
+            RolCodigo.OPERARIO_SABORIZADO,
+        )
+    ),
 ]
 
 # Tomar una orden y arrancar la produccion tambien es trabajo de planta: el
@@ -94,7 +107,7 @@ def _verificar_puede_iniciar(orden, usuario: Usuario) -> None:
 @router.get("", response_model=list[OrdenSalida])
 def listar(
     db: BD,
-    usuario: UsuarioAutenticado,
+    usuario: VeOrdenes,
     estado: str | None = None,
     solo_propias: bool | None = None,
 ):
@@ -109,7 +122,7 @@ def crear(datos: OrdenGuardar, db: BD, usuario: Supervisa):
 
 
 @router.get("/{orden_id}", response_model=OrdenDetalle)
-def detalle(orden_id: int, db: BD, _: UsuarioAutenticado):
+def detalle(orden_id: int, db: BD, _: VeOrdenes):
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     return OrdenDetalle(
         orden=OrdenSalida.model_validate(orden),
@@ -168,7 +181,7 @@ def eliminar(orden_id: int, db: BD, admin: SoloAdmin) -> dict:
 
 
 @router.get("/{orden_id}/registros-horno", response_model=list[RegistroHornoSalida])
-def listar_registros_horno(orden_id: int, db: BD, _: UsuarioAutenticado):
+def listar_registros_horno(orden_id: int, db: BD, _: VeOrdenes):
     servicio_ordenes.obtener_orden(db, orden_id)
     return servicio_horno.listar_registros(db, orden_id)
 
@@ -205,7 +218,7 @@ def eliminar_registro_horno(orden_id: int, registro_id: int, db: BD, admin: Solo
 
 
 @router.get("/{orden_id}/recepciones", response_model=list[RecepcionSalida])
-def listar_recepciones(orden_id: int, db: BD, _: UsuarioAutenticado):
+def listar_recepciones(orden_id: int, db: BD, _: VeOrdenes):
     servicio_ordenes.obtener_orden(db, orden_id)
     return servicio_saborizado.listar_recepciones(db, orden_id)
 

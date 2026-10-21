@@ -20,6 +20,7 @@ def _registro(**cambios) -> RegistroHornoGuardar:
     base = dict(
         hora_inicio=time(6, 0),
         hora_fin=time(7, 0),
+        referencia_papa_id=1,
         cantidad_bultos=Decimal("10"),
         operarios_seleccion=2,
         operarios_horno=1,

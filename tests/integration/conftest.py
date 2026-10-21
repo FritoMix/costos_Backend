@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.bodega.models import ReferenciaPapa
 from app.modules.catalogos.models import (
     CategoriaProducto,
     ConfiguracionPlanta,
@@ -60,6 +61,11 @@ def datos_base(db: Session) -> SimpleNamespace:
         peso_estandar_canastilla_kg=Decimal("6.00"),
     )
     sabor = Sabor(nombre="Natural de Prueba", activo=True)
+    referencia_papa = ReferenciaPapa(
+        nombre="Papa de Prueba",
+        peso_promedio_bulto_kg=Decimal("50.00"),
+        activo=True,
+    )
 
     supervisor = _usuario("Supervisor de Prueba", "supervisor_prueba", roles[RolCodigo.SUPERVISOR])
     admin = _usuario("Admin de Prueba", "admin_prueba", roles[RolCodigo.ADMIN])
@@ -73,8 +79,24 @@ def datos_base(db: Session) -> SimpleNamespace:
         "operario_saborizado_prueba",
         roles[RolCodigo.OPERARIO_SABORIZADO],
     )
+    bodeguero = _usuario(
+        "Bodeguero de Prueba",
+        "bodeguero_prueba",
+        roles[RolCodigo.BODEGUERO],
+    )
 
-    db.add_all([producto, sabor, supervisor, admin, operario_horno, operario_saborizado])
+    db.add_all(
+        [
+            producto,
+            sabor,
+            referencia_papa,
+            supervisor,
+            admin,
+            operario_horno,
+            operario_saborizado,
+            bodeguero,
+        ]
+    )
     db.flush()
 
     return SimpleNamespace(
@@ -85,10 +107,12 @@ def datos_base(db: Session) -> SimpleNamespace:
         configuracion=configuracion,
         producto=producto,
         sabor=sabor,
+        referencia_papa=referencia_papa,
         supervisor=supervisor,
         admin=admin,
         operario_horno=operario_horno,
         operario_saborizado=operario_saborizado,
+        bodeguero=bodeguero,
     )
 
 

@@ -29,6 +29,7 @@ def cliente(db: Session, datos_base):
         datos_base.supervisor,
         datos_base.operario_horno,
         datos_base.operario_saborizado,
+        datos_base.bodeguero,
     ):
         usuario.password_hash = hash_password(PASSWORD)
     db.flush()
@@ -199,6 +200,84 @@ def test_catalogos_crud_configuracion_y_densidad(
     _json(cliente.get(f"{API}/catalogos/densidad-aceite/vigentes"))
 
 
+def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
+    _login(cliente)
+    _json(cliente.get(f"{API}/bodega/referencias-papa"))
+
+    creada = _json(
+        cliente.post(
+            f"{API}/bodega/referencias-papa",
+            json={"nombre": "Papa API", "peso_promedio_bulto_kg": "48.50"},
+        ),
+        201,
+    )
+    assert creada["peso_promedio_bulto_kg"] == "48.50"
+    _json(cliente.get(f"{API}/bodega/referencias-papa/{creada['id']}"))
+    _json(cliente.get(f"{API}/bodega/referencias-papa?solo_activas=true"))
+
+    assert cliente.post(
+        f"{API}/bodega/referencias-papa",
+        json={"nombre": "papa api", "peso_promedio_bulto_kg": "50"},
+    ).status_code == 400
+    assert cliente.post(
+        f"{API}/bodega/referencias-papa",
+        json={"nombre": "   ", "peso_promedio_bulto_kg": "50"},
+    ).status_code == 400
+
+    actualizada = _json(
+        cliente.put(
+            f"{API}/bodega/referencias-papa/{creada['id']}",
+            json={
+                "nombre": "Papa API corregida",
+                "peso_promedio_bulto_kg": "49.25",
+                "activo": False,
+            },
+        )
+    )
+    assert actualizada["activo"] is False
+
+    # El bodeguero gestiona su catalogo, pero no los demas modulos.
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+    _json(bodeguero.get(f"{API}/bodega/referencias-papa"))
+    # Bodega no entra a la operacion ni a la administracion del sistema.
+    for ruta in (
+        "/ordenes",
+        "/catalogos/productos",
+        "/catalogos/configuracion",
+        "/usuarios",
+    ):
+        assert bodeguero.get(f"{API}{ruta}").status_code == 403
+    creada_bodeguero = _json(
+        bodeguero.post(
+            f"{API}/bodega/referencias-papa",
+            json={"nombre": "Papa del bodeguero", "peso_promedio_bulto_kg": "52"},
+        ),
+        201,
+    )
+    assert bodeguero.post(
+        f"{API}/catalogos/categorias", json={"nombre": "No permitido"}
+    ).status_code == 403
+    bodeguero.close()
+
+    # El operario puede leerlas para registrar la tanda, pero no editarlas.
+    operario = TestClient(app)
+    _login(operario, "operario_horno_prueba")
+    _json(operario.get(f"{API}/bodega/referencias-papa"))
+    assert operario.post(
+        f"{API}/bodega/referencias-papa",
+        json={"nombre": "No permitido", "peso_promedio_bulto_kg": "50"},
+    ).status_code == 403
+    operario.close()
+
+    assert cliente.delete(
+        f"{API}/bodega/referencias-papa/{creada['id']}"
+    ).status_code == 204
+    assert cliente.delete(
+        f"{API}/bodega/referencias-papa/{creada_bodeguero['id']}"
+    ).status_code == 204
+
+
 def test_usuarios_crud_y_permisos(cliente: TestClient, datos_base):
     _login(cliente)
     _json(cliente.get(f"{API}/usuarios/roles"))
@@ -305,6 +384,7 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
             json={
                 "hora_inicio": "06:00:00",
                 "hora_fin": "07:00:00",
+                "referencia_papa_id": datos_base.referencia_papa.id,
                 "cantidad_bultos": "10",
                 "operarios_seleccion": 2,
                 "operarios_horno": 1,
@@ -324,6 +404,7 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
             json={
                 "hora_inicio": "06:00:00",
                 "hora_fin": "07:30:00",
+                "referencia_papa_id": datos_base.referencia_papa.id,
                 "cantidad_bultos": "11",
                 "operarios_seleccion": 2,
                 "operarios_horno": 1,
