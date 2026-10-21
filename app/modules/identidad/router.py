@@ -37,7 +37,9 @@ router_usuarios = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 @router_auth.post("/login", response_model=SesionSalida)
 def iniciar_sesion(datos: LoginPeticion, db: BD, response: Response) -> SesionSalida:
     usuario = service.autenticar(db, datos.nombre_usuario.strip().lower(), datos.password)
-    token, segundos = crear_token_acceso(usuario.id, usuario.rol.codigo)
+    token, segundos = crear_token_acceso(
+        usuario.id, usuario.rol.codigo, usuario.token_version
+    )
     # El token se entrega SOLO como cookie HttpOnly: no vuelve en el cuerpo,
     # asi que el JavaScript del navegador nunca llega a verlo.
     poner_cookie_sesion(response, token, segundos)
@@ -61,8 +63,19 @@ def usuario_conectado(usuario: UsuarioAutenticado) -> Usuario:
 
 
 @router_auth.post("/cambiar-password", status_code=status.HTTP_204_NO_CONTENT)
-def cambiar_password(datos: CambiarPasswordPeticion, usuario: UsuarioAutenticado, db: BD) -> None:
+def cambiar_password(
+    datos: CambiarPasswordPeticion,
+    usuario: UsuarioAutenticado,
+    db: BD,
+    response: Response,
+) -> None:
     service.cambiar_password_propia(db, usuario, datos.password_actual, datos.password_nueva)
+    # La contrasena cambio y la version subio: se emite un token nuevo para
+    # que esta sesion siga abierta, mientras las demas quedan revocadas.
+    token, segundos = crear_token_acceso(
+        usuario.id, usuario.rol.codigo, usuario.token_version
+    )
+    poner_cookie_sesion(response, token, segundos)
 
 
 # --- Usuarios (solo Administrador) ----------------------------------------

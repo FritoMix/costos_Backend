@@ -36,7 +36,7 @@ def verificar_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def crear_token_acceso(usuario_id: int, rol: str) -> tuple[str, int]:
+def crear_token_acceso(usuario_id: int, rol: str, token_version: int = 0) -> tuple[str, int]:
     """
     Genera el token de sesion del usuario.
 
@@ -48,6 +48,7 @@ def crear_token_acceso(usuario_id: int, rol: str) -> tuple[str, int]:
     contenido = {
         "sub": str(usuario_id),
         "rol": rol,
+        "tv": token_version,
         "exp": expira_en,
         "iat": datetime.now(UTC),
     }

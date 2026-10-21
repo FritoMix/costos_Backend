@@ -1,0 +1,11 @@
+[Unit]
+Description=Ejecuta el backup diario de DATACONTROL
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=10m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

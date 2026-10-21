@@ -38,6 +38,15 @@ def usuario_actual(
     if usuario is None or not usuario.puede_entrar:
         # La cuenta fue desactivada o eliminada despues de iniciar sesion.
         raise CredencialesInvalidas("Tu cuenta ya no está habilitada.")
+
+    # Los tokens viejos no llevan "tv": se interpretan como version 0, que
+    # es la que tienen los usuarios creados antes de esta funcionalidad. En
+    # cuanto cambian la contrasena o se desactivan, la version sube y esos
+    # tokens dejan de servir inmediatamente.
+    if contenido.get("tv", 0) != usuario.token_version:
+        raise CredencialesInvalidas(
+            "Tu sesión quedó invalidada por un cambio de contraseña. Vuelve a iniciar sesión."
+        )
     return usuario
 
 

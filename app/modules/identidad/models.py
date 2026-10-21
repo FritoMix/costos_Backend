@@ -44,6 +44,12 @@ class Usuario(Base):
     nombre_completo: Mapped[str] = mapped_column(String(150))
     nombre_usuario: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    # Version de la sesion. Se incluye en el JWT y se incrementa cuando la
+    # contrasena cambia o la cuenta se desactiva: los tokens emitidos antes
+    # dejan de coincidir y la API los rechaza.
+    token_version: Mapped[int] = mapped_column(
+        default=0, server_default=text("0"), nullable=False
+    )
 
     rol_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
     rol: Mapped["Rol"] = relationship(back_populates="usuarios", lazy="joined")

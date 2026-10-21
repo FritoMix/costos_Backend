@@ -56,3 +56,25 @@ def test_sin_cabeceras_usa_la_ip_de_la_conexion():
     request = _request("192.168.1.30")
 
     assert obtener_ip_cliente(request) == "192.168.1.30"
+
+
+def test_encuentra_el_handler_a_traves_de_los_routers_anidados():
+    from app.core.limite import buscar_handler
+    from app.main import app
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "headers": [],
+        "query_string": b"",
+        "root_path": "",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 12345),
+    }
+
+    handler = buscar_handler(app.routes, scope)
+
+    assert handler is not None
+    assert handler.__name__ == "iniciar_sesion"

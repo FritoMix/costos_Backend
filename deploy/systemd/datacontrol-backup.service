@@ -1,0 +1,21 @@
+[Unit]
+Description=Backup diario de PostgreSQL de DATACONTROL
+Documentation=file:/opt/datacontrol/docs/OPERACION.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Ajustar al usuario que ejecuta docker compose y puede leer /opt/datacontrol/.env.
+User=datacontrol
+Group=datacontrol
+SupplementaryGroups=docker
+WorkingDirectory=/opt/datacontrol
+Environment=BACKUP_DIR=/var/lib/datacontrol-backups
+Environment=RETENTION_DAYS=14
+StateDirectory=datacontrol-backups
+StateDirectoryMode=0750
+ExecStart=/opt/datacontrol/scripts/backup_postgres.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
