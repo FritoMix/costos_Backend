@@ -25,10 +25,16 @@ class FiltrosAnalisis(BaseModel):
 
 
 class Desglose(BaseModel):
-    """Una barra de una grafica: una etiqueta y su valor en kg."""
+    """Una barra de una grafica: una etiqueta y su valor en kg.
+
+    El campo ``meta`` es opcional: si está presente indica la cantidad
+    programada para ese ítem, y el frontend lo usa para colorear la barra
+    en verde (cumplió) o rojo (no cumplió).
+    """
 
     etiqueta: str
     valor: Decimal
+    meta: Decimal | None = None
 
 
 class IndicadoresSalida(BaseModel):
