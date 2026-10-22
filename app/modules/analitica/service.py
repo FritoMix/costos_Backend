@@ -170,14 +170,45 @@ def _calcular_indicadores_interno(db: Session, filtros: FiltrosAnalisis) -> Indi
         )
         return db.execute(consulta).all()
 
-    por_horno = suma_papa_frita_por(Horno.nombre, Horno, OrdenProduccion.horno_id == Horno.id)
-    por_turno = suma_papa_frita_por(Turno.nombre, Turno, OrdenProduccion.turno_id == Turno.id)
+    # kg programados por horno (para la meta)
+    meta_por_horno = dict(
+        db.execute(
+            select(Horno.nombre, func.coalesce(func.sum(OrdenProduccion.cantidad_programada), 0))
+            .select_from(OrdenProduccion)
+            .join(Horno, OrdenProduccion.horno_id == Horno.id)
+            .where(OrdenProduccion.id.in_(ids_ordenes))
+            .group_by(Horno.nombre)
+        ).all()
+    )
+
+    # kg programados por turno (para la meta)
+    meta_por_turno = dict(
+        db.execute(
+            select(Turno.nombre, func.coalesce(func.sum(OrdenProduccion.cantidad_programada), 0))
+            .select_from(OrdenProduccion)
+            .join(Turno, OrdenProduccion.turno_id == Turno.id)
+            .where(OrdenProduccion.id.in_(ids_ordenes))
+            .group_by(Turno.nombre)
+        ).all()
+    )
+
+    por_horno_filas = suma_papa_frita_por(Horno.nombre, Horno, OrdenProduccion.horno_id == Horno.id)
+    por_turno_filas = suma_papa_frita_por(Turno.nombre, Turno, OrdenProduccion.turno_id == Turno.id)
     por_producto = suma_papa_frita_por(
         Producto.nombre_comercial,
         Producto,
         OrdenProduccion.producto_id == Producto.id,
         orden_por=func.sum(RegistroSaborizado.kg_recibidos).desc(),
     )[:10]
+
+    por_horno = [
+        Desglose(etiqueta=etiqueta, valor=valor, meta=meta_por_horno.get(etiqueta))
+        for etiqueta, valor in por_horno_filas
+    ]
+    por_turno = [
+        Desglose(etiqueta=etiqueta, valor=valor, meta=meta_por_turno.get(etiqueta))
+        for etiqueta, valor in por_turno_filas
+    ]
 
     por_tipo_desperdicio = db.execute(
         select(TipoDesperdicio.nombre, func.coalesce(func.sum(Desperdicio.cantidad_kg), 0))
@@ -200,9 +231,9 @@ def _calcular_indicadores_interno(db: Session, filtros: FiltrosAnalisis) -> Indi
         aceite_por_bulto=aceite_por_bulto,
         rendimiento_porcentaje=rendimiento,
         porcentaje_absorcion_aceite=absorcion,
-        por_horno=_desglose(por_horno),
+        por_horno=por_horno,
         por_producto=_desglose(por_producto),
-        por_turno=_desglose(por_turno),
+        por_turno=por_turno,
         por_tipo_desperdicio=_desglose(por_tipo_desperdicio),
     )
 

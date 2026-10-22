@@ -28,6 +28,7 @@ from app.modules.catalogos.models import Horno, Producto
 from app.modules.catalogos.service import obtener_configuracion
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.notificaciones import service as notificaciones
+from app.modules.produccion.dominio.limites import validar_horas_de_orden
 from app.modules.produccion.models import (
     DestinoOrden,
     EstadoOrden,
@@ -38,6 +39,7 @@ from app.modules.produccion.models import (
     UnidadSolicitada,
 )
 from app.modules.produccion.schemas import OrdenGuardar
+from app.modules.produccion.servicios.registros import bloquear_orden
 
 logger = logging.getLogger("datacontrol")
 
@@ -234,7 +236,27 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
             "Esta orden ya no se puede editar porque está Finalizada o Cancelada."
         )
 
+    bloquear_orden(db, orden.id)
     _horno, producto = _validar_catalogos(db, datos)
+
+    if datos.horas_produccion is not None:
+        registros_horno = db.scalars(
+            select(RegistroHorno).where(
+                RegistroHorno.orden_id == orden.id,
+                RegistroHorno.eliminado.is_(False),
+            )
+        ).all()
+        registros_saborizado = db.scalars(
+            select(RegistroSaborizado).where(
+                RegistroSaborizado.orden_id == orden.id,
+                RegistroSaborizado.eliminado.is_(False),
+            )
+        ).all()
+        validar_horas_de_orden(
+            horas_nuevas=datos.horas_produccion,
+            registros_horno=registros_horno,
+            registros_saborizado=registros_saborizado,
+        )
 
     if orden.estado == EstadoOrden.EN_PRODUCCION and datos.horno_id != orden.horno_id:
         # Cambiar de horno con la orden ya en produccion vuelve a chocar

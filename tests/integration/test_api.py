@@ -656,6 +656,107 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
     assert cliente.get(f"{API}/ordenes/{orden_id}").status_code == 404
 
 
+def test_los_registros_no_superan_las_horas_de_la_orden(cliente: TestClient, datos_base):
+    _login(cliente)
+
+    orden = _json(
+        cliente.post(
+            f"{API}/ordenes",
+            json={
+                "turno_id": datos_base.turno.id,
+                "horno_id": datos_base.horno.id,
+                "categoria_id": datos_base.categoria.id,
+                "producto_id": datos_base.producto.id,
+                "destino": "nacional",
+                "unidad_solicitada": "kg",
+                "cantidad_kg": "100.00",
+                "horas_produccion": 1,
+            },
+        ),
+        201,
+    )
+    orden_id = orden["id"]
+    _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
+
+    datos_horno = {
+        "hora_inicio": "06:00:00",
+        "hora_fin": "07:00:00",
+        "referencia_papa_id": datos_base.referencia_papa.id,
+        "cantidad_bultos": "10",
+        "operarios_seleccion": 2,
+        "operarios_horno": 1,
+        "nivel_aceite_inicial_cm": "20",
+        "nivel_aceite_final_cm": "18",
+        "temperatura_aceite_c": "175",
+    }
+    primera_tanda = _json(
+        cliente.post(f"{API}/ordenes/{orden_id}/registros-horno", json=datos_horno),
+        201,
+    )
+
+    # El mismo horario es un duplicado, aunque la orden tuviera mas horas.
+    duplicada = cliente.post(
+        f"{API}/ordenes/{orden_id}/registros-horno", json=datos_horno
+    )
+    assert duplicada.status_code == 400, duplicada.text
+    assert "se cruza" in duplicada.json()["detail"]
+
+    # Otra hora seguida ya excede la unica hora programada.
+    excedida = cliente.post(
+        f"{API}/ordenes/{orden_id}/registros-horno",
+        json={**datos_horno, "hora_inicio": "07:00:00", "hora_fin": "08:00:00"},
+    )
+    assert excedida.status_code == 400, excedida.text
+    assert "Solo quedan 0 min" in excedida.json()["detail"]
+
+    # Corregir la tanda existente no se bloquea a si misma.
+    _json(
+        cliente.put(
+            f"{API}/ordenes/{orden_id}/registros-horno/{primera_tanda['id']}",
+            json={**datos_horno, "cantidad_bultos": "12"},
+        )
+    )
+
+    datos_recepcion = {
+        "hora_inicio": "07:00:00",
+        "hora_fin": "08:00:00",
+        "sabor_id": datos_base.sabor.id,
+        "cantidad_sabor_kg": "1.00",
+        "pesos_canastillas": ["6.00", "5.50"],
+    }
+    _json(
+        cliente.post(f"{API}/ordenes/{orden_id}/recepciones", json=datos_recepcion),
+        201,
+    )
+
+    recepcion_duplicada = cliente.post(
+        f"{API}/ordenes/{orden_id}/recepciones", json=datos_recepcion
+    )
+    assert recepcion_duplicada.status_code == 400, recepcion_duplicada.text
+    assert "se cruza" in recepcion_duplicada.json()["detail"]
+
+    recepcion_excedida = cliente.post(
+        f"{API}/ordenes/{orden_id}/recepciones",
+        json={**datos_recepcion, "hora_inicio": "08:00:00", "hora_fin": "09:00:00"},
+    )
+    assert recepcion_excedida.status_code == 400, recepcion_excedida.text
+    assert "Solo quedan 0 min" in recepcion_excedida.json()["detail"]
+
+    # El borrado suave libera el tiempo para volver a registrar.
+    assert (
+        cliente.delete(
+            f"{API}/ordenes/{orden_id}/registros-horno/{primera_tanda['id']}"
+        ).status_code
+        == 204
+    )
+    _json(
+        cliente.post(f"{API}/ordenes/{orden_id}/registros-horno", json=datos_horno),
+        201,
+    )
+
+    _json(cliente.delete(f"{API}/ordenes/{orden_id}"))
+
+
 def test_el_limite_global_responde_429(cliente: TestClient):
     _login(cliente)
     limiter.reset()
