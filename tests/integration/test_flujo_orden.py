@@ -229,6 +229,36 @@ def test_no_se_puede_editar_una_orden_finalizada(db, datos_base, orden_guardar):
         )
 
 
+def test_no_se_pueden_reducir_las_horas_por_debajo_de_lo_registrado(
+    db, datos_base, orden_guardar
+):
+    orden = servicio_ordenes.crear_orden(
+        db, orden_guardar(horas_produccion=2), datos_base.supervisor
+    )
+    servicio_ordenes.iniciar_orden(db, orden)
+
+    servicio_horno.crear_registro(
+        db,
+        orden,
+        _registro_horno(
+            referencia_papa_id=datos_base.referencia_papa.id,
+            hora_fin=time(7, 30),
+        ),
+        datos_base.operario_horno,
+    )
+
+    with pytest.raises(ErrorDeValidacion, match="No puedes dejar"):
+        servicio_ordenes.editar_orden(
+            db, orden, orden_guardar(horas_produccion=1)
+        )
+
+    # Subir las horas si es valido y vuelve a habilitar el registro.
+    actualizada = servicio_ordenes.editar_orden(
+        db, orden, orden_guardar(horas_produccion=3)
+    )
+    assert actualizada.horas_produccion == 3
+
+
 def test_la_tanda_usa_y_congela_los_parametros_de_la_referencia(
     db, datos_base, orden_guardar
 ):

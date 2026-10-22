@@ -17,6 +17,7 @@ from app.core.tiempo import combinar_fecha_y_hora
 from app.modules.catalogos.models import Sabor
 from app.modules.catalogos.service import detectar_turno_por_hora
 from app.modules.identidad.models import RolCodigo, Usuario
+from app.modules.produccion.dominio.limites import validar_ventana_registro
 from app.modules.produccion.models import (
     Canastilla,
     EstadoOrden,
@@ -24,6 +25,7 @@ from app.modules.produccion.models import (
     RegistroSaborizado,
 )
 from app.modules.produccion.schemas import RecepcionGuardar
+from app.modules.produccion.servicios.registros import bloquear_orden
 
 
 def listar_recepciones(db: Session, orden_id: int) -> list[RegistroSaborizado]:
@@ -60,6 +62,14 @@ def _aplicar_datos(
 
     turno = detectar_turno_por_hora(db, datos.hora_inicio)
     inicio, fin = combinar_fecha_y_hora(orden.fecha, datos.hora_inicio, datos.hora_fin)
+    validar_ventana_registro(
+        horas_produccion=orden.horas_produccion,
+        inicio=inicio,
+        fin=fin,
+        registros=listar_recepciones(db, orden.id),
+        tipo_registro="recepción de saborizado",
+        excluir_id=recepcion.id,
+    )
 
     recepcion.turno_id = turno.id
     recepcion.hora_inicio = inicio
@@ -82,6 +92,7 @@ def crear_recepcion(
             "Solo se pueden registrar recepciones para una orden que esté En producción."
         )
 
+    bloquear_orden(db, orden.id)
     recepcion = RegistroSaborizado(orden_id=orden.id, usuario_id=usuario.id)
     recepcion.orden = orden
     _aplicar_datos(db, recepcion, orden, datos)
@@ -101,6 +112,7 @@ def editar_recepcion(
     if usuario.rol.codigo != RolCodigo.ADMIN and recepcion.usuario_id != usuario.id:
         raise ErrorDeValidacion("Solo puedes corregir las recepciones que tú mismo guardaste.")
 
+    bloquear_orden(db, recepcion.orden_id)
     _aplicar_datos(db, recepcion, recepcion.orden, datos)
     db.commit()
     db.refresh(recepcion)

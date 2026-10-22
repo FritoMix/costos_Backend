@@ -31,6 +31,7 @@ from app.modules.produccion.dominio.calculos import (
     calcular_kg_crudos,
     calcular_kg_fritos_estimados,
 )
+from app.modules.produccion.dominio.limites import validar_ventana_registro
 from app.modules.produccion.models import (
     Desperdicio,
     EstadoOrden,
@@ -38,6 +39,7 @@ from app.modules.produccion.models import (
     RegistroHorno,
 )
 from app.modules.produccion.schemas import RegistroHornoGuardar
+from app.modules.produccion.servicios.registros import bloquear_orden
 
 
 def calcular_aceite(
@@ -141,6 +143,14 @@ def _aplicar_datos(
         db, orden.horno, orden.fecha, diferencia
     )
     inicio, fin = combinar_fecha_y_hora(orden.fecha, datos.hora_inicio, datos.hora_fin)
+    validar_ventana_registro(
+        horas_produccion=orden.horas_produccion,
+        inicio=inicio,
+        fin=fin,
+        registros=listar_registros(db, orden.id),
+        tipo_registro="tanda de horno",
+        excluir_id=registro.id,
+    )
 
     registro.hora_inicio = inicio
     registro.hora_fin = fin
@@ -185,6 +195,7 @@ def crear_registro(
             "Solo se pueden registrar datos de horno para una orden que esté En producción."
         )
 
+    bloquear_orden(db, orden.id)
     registro = RegistroHorno(orden_id=orden.id, usuario_id=usuario.id)
     registro.orden = orden
     _aplicar_datos(db, registro, orden, datos)
@@ -211,6 +222,7 @@ def editar_registro(
             "Solo se puede editar un registro de horno mientras la orden esté En producción."
         )
     _verificar_autoria(registro, usuario)
+    bloquear_orden(db, registro.orden_id)
     _aplicar_datos(db, registro, registro.orden, datos)
     db.commit()
     db.refresh(registro)
