@@ -13,6 +13,7 @@ projects:
             name: costos_Backend
             runtime: docker
             repo: https://github.com/FritoMix/costos_Backend
+            branch: main
             plan: free
             region: oregon
             dockerContext: .
