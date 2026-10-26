@@ -16,7 +16,7 @@ pydantic-settings==2.16.1
 # psycopg[binary] trae una wheel autocontenida (no necesita libpq del sistema
 # ni compilar nada): hay versiones para glibc (manylinux, en el CI) y para
 # musl (musllinux, en la imagen Alpine). Asi funciona igual en ambos.
-sqlalchemy==2.1.5
+sqlalchemy==2.1.6
 psycopg[binary]==3.3.6
 
 # --- Seguridad ---
