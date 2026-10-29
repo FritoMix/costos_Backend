@@ -29,8 +29,8 @@ logger = logging.getLogger("datacontrol")
 MINUTOS_DE_AVISO_PREVIO = 15
 
 
-def _destinatarios_operarios(db: Session) -> list[Usuario]:
-    """Operarios de horno y saborizado activos: son quienes trabajan la orden."""
+def _destinatarios_por_rol(db: Session, codigos: list[str]) -> list[Usuario]:
+    """Usuarios activos que tienen alguno de esos roles."""
     return list(
         db.scalars(
             select(Usuario)
@@ -38,10 +38,22 @@ def _destinatarios_operarios(db: Session) -> list[Usuario]:
             .where(
                 Usuario.eliminado == False,
                 Usuario.activo == True,
-                Rol.codigo.in_([RolCodigo.OPERARIO_HORNO, RolCodigo.OPERARIO_SABORIZADO]),
+                Rol.codigo.in_(codigos),
             )
         ).all()
     )
+
+
+def _destinatarios_operarios(db: Session) -> list[Usuario]:
+    """Operarios de horno y saborizado activos: son quienes trabajan la orden."""
+    return _destinatarios_por_rol(
+        db, [RolCodigo.OPERARIO_HORNO, RolCodigo.OPERARIO_SABORIZADO]
+    )
+
+
+def _destinatarios_bodega(db: Session) -> list[Usuario]:
+    """Bodegueros activos: ellos definen la formula de la orden."""
+    return _destinatarios_por_rol(db, [RolCodigo.BODEGUERO])
 
 
 def _crear_para(
@@ -83,6 +95,113 @@ def _crear_para(
             # El aviso ya existia (misma persona, orden y tipo).
             continue
     return creados
+
+
+def _crear_o_actualizar(
+    db: Session,
+    *,
+    usuarios: list[Usuario],
+    tipo: str,
+    titulo: str,
+    mensaje: str,
+    orden_id: int,
+) -> int:
+    """
+    Deja el aviso actualizado para cada destinatario.
+
+    Si Bodega corrige la formula antes de iniciar, el aviso de la misma orden
+    y persona se actualiza (texto, fecha y "no leida") en vez de duplicarse:
+    el indice unico (usuario, orden, tipo) ya impide la segunda fila.
+    """
+    if not usuarios:
+        return 0
+    existentes = {
+        notificacion.usuario_id: notificacion
+        for notificacion in db.scalars(
+            select(Notificacion).where(
+                Notificacion.orden_id == orden_id,
+                Notificacion.tipo == tipo,
+                Notificacion.usuario_id.in_([usuario.id for usuario in usuarios]),
+            )
+        ).all()
+    }
+    cambiados = 0
+    for usuario in usuarios:
+        notificacion = existentes.get(usuario.id)
+        if notificacion is None:
+            continue
+        notificacion.titulo = titulo
+        notificacion.mensaje = mensaje
+        notificacion.fecha_programada = datetime.now(UTC)
+        notificacion.leida = False
+        cambiados += 1
+    creados = _crear_para(
+        db,
+        usuarios=[usuario for usuario in usuarios if usuario.id not in existentes],
+        tipo=tipo,
+        titulo=titulo,
+        mensaje=mensaje,
+        orden_id=orden_id,
+    )
+    return cambiados + creados
+
+
+def avisar_orden_para_bodega(db: Session, orden) -> None:
+    """
+    Aviso a Bodega: hay una orden nueva pendiente de formula.
+
+    Las ordenes nuevas ya no avisan a los operarios al crearse: todavia no
+    se pueden producir. Horno se enterara cuando la formula quede lista.
+    """
+    bodegueros = _destinatarios_bodega(db)
+    if not bodegueros:
+        return
+
+    destino = (orden.destino or "").capitalize()
+    horas = orden.horas_produccion
+    duracion = f" · {horas} {'hora' if horas == 1 else 'horas'}" if horas else ""
+
+    _crear_para(
+        db,
+        usuarios=bodegueros,
+        tipo=TipoNotificacion.ORDEN_PARA_BODEGA,
+        titulo=f"Orden pendiente de fórmula · {orden.numero_orden}",
+        mensaje=(
+            f"Nueva orden {orden.numero_orden} de {orden.producto.nombre_comercial} "
+            f"({destino}) · {orden.cantidad_programada} kg{duracion} · "
+            f"{orden.horno.nombre}. Pendiente de fórmula."
+        ),
+        orden_id=orden.id,
+    )
+    db.commit()
+
+
+def avisar_formula_lista(db: Session, orden) -> None:
+    """
+    Aviso a horno y al supervisor: la formula quedo lista para producir.
+
+    No se reutiliza `_destinatarios_operarios` porque saborizado no trabaja
+    la mezcla de papa: solo avisa a horno y al supervisor de la orden.
+    """
+    destinatarios = _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO])
+    supervisor = orden.supervisor
+    if supervisor is not None and supervisor.eliminado is False and supervisor.activo:
+        destinatarios.append(supervisor)
+    if not destinatarios:
+        return
+
+    _crear_o_actualizar(
+        db,
+        usuarios=destinatarios,
+        tipo=TipoNotificacion.FORMULA_LISTA,
+        titulo=f"Fórmula lista · {orden.numero_orden}",
+        mensaje=(
+            f"Fórmula lista para {orden.numero_orden}: {orden.producto.nombre_comercial} "
+            f"· {orden.horno.nombre}. Revisa la mezcla en la orden."
+        ),
+        orden_id=orden.id,
+    )
+    db.commit()
 
 
 def avisar_orden_creada(db: Session, orden) -> None:

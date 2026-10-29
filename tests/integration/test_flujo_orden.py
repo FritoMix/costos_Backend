@@ -80,7 +80,7 @@ def _recepcion(datos_base, **cambios) -> RecepcionGuardar:
     return RecepcionGuardar(**base)
 
 
-def test_crear_iniciar_y_finalizar_una_orden(db, datos_base, orden_guardar):
+def test_crear_iniciar_y_finalizar_una_orden(db, datos_base, orden_guardar, guardar_formula):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
@@ -89,12 +89,14 @@ def test_crear_iniciar_y_finalizar_una_orden(db, datos_base, orden_guardar):
     assert orden.numero_orden == f"OP-{orden.fecha:%Y%m%d}-0001"
     assert orden.cantidad_programada == Decimal("100.00")
 
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
     assert orden.estado == EstadoOrden.EN_PRODUCCION
     assert orden.hora_inicio is not None
 
     # Mientras una orden ocupa el horno, otra no puede entrar en produccion.
     segunda = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    guardar_formula(segunda)
     with pytest.raises(ErrorDeValidacion, match="ya tiene la orden"):
         servicio_ordenes.iniciar_orden(db, segunda)
 
@@ -142,11 +144,12 @@ def test_la_base_impide_dos_ordenes_en_produccion_en_el_mismo_horno(db, datos_ba
 
 
 def test_borrado_suave_arrastra_registros_y_sale_de_los_totales(
-    db, datos_base, orden_guardar
+    db, datos_base, orden_guardar, guardar_formula
 ):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
 
     registro = servicio_horno.crear_registro(
@@ -180,10 +183,11 @@ def test_borrado_suave_arrastra_registros_y_sale_de_los_totales(
     assert totales.kg_papa_frita == 0
 
 
-def test_cancelar_orden_libera_el_horno(db, datos_base, orden_guardar):
+def test_cancelar_orden_libera_el_horno(db, datos_base, orden_guardar, guardar_formula):
     primera = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(primera)
     servicio_ordenes.iniciar_orden(db, primera)
 
     servicio_ordenes.cancelar_orden(db, primera)
@@ -192,16 +196,18 @@ def test_cancelar_orden_libera_el_horno(db, datos_base, orden_guardar):
     segunda = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(segunda)
     servicio_ordenes.iniciar_orden(db, segunda)
     assert segunda.estado == EstadoOrden.EN_PRODUCCION
 
 
 def test_borrado_suave_de_una_orden_en_produccion_libera_el_horno(
-    db, datos_base, orden_guardar
+    db, datos_base, orden_guardar, guardar_formula
 ):
     primera = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(primera)
     servicio_ordenes.iniciar_orden(db, primera)
 
     servicio_ordenes.eliminar_orden(db, primera, datos_base.admin)
@@ -212,14 +218,18 @@ def test_borrado_suave_de_una_orden_en_produccion_libera_el_horno(
     segunda = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(segunda)
     servicio_ordenes.iniciar_orden(db, segunda)
     assert segunda.estado == EstadoOrden.EN_PRODUCCION
 
 
-def test_no_se_puede_editar_una_orden_finalizada(db, datos_base, orden_guardar):
+def test_no_se_puede_editar_una_orden_finalizada(
+    db, datos_base, orden_guardar, guardar_formula
+):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
     servicio_ordenes.finalizar_orden(db, orden)
 
@@ -230,11 +240,12 @@ def test_no_se_puede_editar_una_orden_finalizada(db, datos_base, orden_guardar):
 
 
 def test_no_se_pueden_reducir_las_horas_por_debajo_de_lo_registrado(
-    db, datos_base, orden_guardar
+    db, datos_base, orden_guardar, guardar_formula
 ):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(horas_produccion=2), datos_base.supervisor
     )
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
 
     servicio_horno.crear_registro(
@@ -242,7 +253,19 @@ def test_no_se_pueden_reducir_las_horas_por_debajo_de_lo_registrado(
         orden,
         _registro_horno(
             referencia_papa_id=datos_base.referencia_papa.id,
-            hora_fin=time(7, 30),
+            hora_inicio=time(6, 0),
+            hora_fin=time(7, 0),
+        ),
+        datos_base.operario_horno,
+    )
+    # Una tanda no puede durar más de 60 minutos: la segunda ocupa la otra hora.
+    servicio_horno.crear_registro(
+        db,
+        orden,
+        _registro_horno(
+            referencia_papa_id=datos_base.referencia_papa.id,
+            hora_inicio=time(7, 0),
+            hora_fin=time(8, 0),
         ),
         datos_base.operario_horno,
     )
@@ -259,29 +282,36 @@ def test_no_se_pueden_reducir_las_horas_por_debajo_de_lo_registrado(
     assert actualizada.horas_produccion == 3
 
 
-def test_la_tanda_usa_y_congela_los_parametros_de_la_referencia(
-    db, datos_base, orden_guardar
+def test_la_tanda_usa_y_congela_los_parametros_de_la_formula(
+    db, datos_base, orden_guardar, guardar_formula
 ):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
-    servicio_ordenes.iniciar_orden(db, orden)
 
     referencia = datos_base.referencia_papa
     referencia.peso_promedio_bulto_kg = Decimal("48.00")
     db.flush()
+
+    guardar_formula(orden)
+    servicio_ordenes.iniciar_orden(db, orden)
 
     registro = servicio_horno.crear_registro(
         db, orden, _registro_horno(referencia_papa_id=referencia.id),
         datos_base.operario_horno,
     )
 
-    assert registro.referencia_papa_id == referencia.id
-    assert registro.peso_estandar_bulto_kg == Decimal("48.00")
-    assert registro.rendimiento_fritura_pct == Decimal("25.00")
-    assert registro.porcentaje_produccion_pct == Decimal("100.00")
-    assert registro.kg_crudos_calculados == Decimal("480.00")
-    assert registro.kg_fritos_estimados == Decimal("120.00")
+    # La cabecera guarda la suma; el detalle por referencia vive en la tabla hija.
+    assert registro.referencia_papa_id is None
+    assert registro.peso_estandar_bulto_kg is None
+    assert len(registro.referencias) == 1
+    fila = registro.referencias[0]
+    assert fila.referencia_papa_id == referencia.id
+    assert fila.peso_estandar_bulto_kg == Decimal("48.00")
+    assert fila.rendimiento_fritura_pct == Decimal("25.00")
+    assert fila.porcentaje_produccion_pct == Decimal("100.00")
+    assert fila.kg_crudos_calculados == Decimal("480.00")
+    assert fila.kg_fritos_estimados == Decimal("120.00")
 
     # Un cambio posterior en bodega no reescribe la tanda ya guardada.
     referencia.peso_promedio_bulto_kg = Decimal("45.00")
@@ -289,16 +319,20 @@ def test_la_tanda_usa_y_congela_los_parametros_de_la_referencia(
     db.flush()
     db.refresh(registro)
 
-    assert registro.peso_estandar_bulto_kg == Decimal("48.00")
-    assert registro.rendimiento_fritura_pct == Decimal("25.00")
-    assert registro.kg_crudos_calculados == Decimal("480.00")
-    assert registro.kg_fritos_estimados == Decimal("120.00")
+    fila = registro.referencias[0]
+    assert fila.peso_estandar_bulto_kg == Decimal("48.00")
+    assert fila.rendimiento_fritura_pct == Decimal("25.00")
+    assert fila.kg_crudos_calculados == Decimal("480.00")
+    assert fila.kg_fritos_estimados == Decimal("120.00")
 
 
 def test_una_referencia_historica_sin_parametros_no_se_usa_en_tandas_nuevas(
     db, datos_base, orden_guardar
 ):
     orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    # Orden histórica: no exige fórmula y usa la referencia única del catálogo.
+    orden.formula_obligatoria = False
+    db.flush()
     servicio_ordenes.iniciar_orden(db, orden)
 
     referencia = datos_base.referencia_papa
@@ -319,6 +353,8 @@ def test_una_tanda_historica_sin_rendimiento_se_puede_corregir(
     db, datos_base, orden_guardar
 ):
     orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    orden.formula_obligatoria = False
+    db.flush()
     servicio_ordenes.iniciar_orden(db, orden)
     referencia = datos_base.referencia_papa
     registro = servicio_horno.crear_registro(
@@ -354,11 +390,12 @@ def test_una_tanda_historica_sin_rendimiento_se_puede_corregir(
 
 
 def test_no_se_elimina_una_referencia_que_ya_tiene_tandas(
-    db, datos_base, orden_guardar
+    db, datos_base, orden_guardar, guardar_formula
 ):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
     servicio_horno.crear_registro(
         db,
@@ -377,6 +414,8 @@ def test_una_referencia_inactiva_no_se_puede_usar_en_una_tanda_nueva(
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    orden.formula_obligatoria = False
+    db.flush()
     servicio_ordenes.iniciar_orden(db, orden)
 
     datos_base.referencia_papa.activo = False
@@ -391,10 +430,13 @@ def test_una_referencia_inactiva_no_se_puede_usar_en_una_tanda_nueva(
         )
 
 
-def test_el_desperdicio_se_refleja_en_los_totales(db, datos_base, orden_guardar):
+def test_el_desperdicio_se_refleja_en_los_totales(
+    db, datos_base, orden_guardar, guardar_formula
+):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
 
     registro = servicio_horno.crear_registro(
@@ -414,11 +456,12 @@ def test_el_desperdicio_se_refleja_en_los_totales(db, datos_base, orden_guardar)
 
 
 def test_recepcion_guarda_los_pesos_reales_de_cada_canastilla(
-    db, datos_base, orden_guardar
+    db, datos_base, orden_guardar, guardar_formula
 ):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
+    guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
 
     recepcion = servicio_saborizado.crear_recepcion(

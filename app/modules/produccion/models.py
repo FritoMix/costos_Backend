@@ -8,6 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -51,6 +52,17 @@ ESTADO_ETIQUETAS = {
     EstadoOrden.FINALIZADA: "Finalizada",
     EstadoOrden.CANCELADA: "Cancelada",
 }
+
+
+class EstadoFormula:
+    """Estado de la formula, independiente del estado de la orden."""
+
+    SIN_FORMULA = "sin_formula"
+    LISTA = "lista"
+    EN_PRODUCCION = "en_produccion"
+    FINALIZADA = "finalizada"
+    CANCELADA = "cancelada"
+    NO_APLICA = "no_aplica"
 
 
 class DestinoOrden:
@@ -147,6 +159,29 @@ class OrdenProduccion(Base):
         String(20), default=EstadoOrden.PENDIENTE, server_default=EstadoOrden.PENDIENTE
     )
 
+    # Formula de produccion definida por Bodega. Las ordenes nuevas exigen
+    # formula; las historicas (creadas antes de V10) no.
+    formula_obligatoria: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+    formula_notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    formula_actualizada_por_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id"), nullable=True
+    )
+    formula_actualizada_por: Mapped[Usuario | None] = relationship(
+        foreign_keys=[formula_actualizada_por_id], lazy="selectin"
+    )
+    formula_fecha_actualizacion: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    referencias: Mapped[list["OrdenReferencia"]] = relationship(
+        back_populates="orden",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="OrdenReferencia.id",
+    )
+
     hora_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     hora_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fecha_creacion: Mapped[datetime] = mapped_column(
@@ -166,11 +201,97 @@ class OrdenProduccion(Base):
         return ESTADO_ETIQUETAS.get(self.estado, self.estado)
 
     @property
+    def formula_estado(self) -> str:
+        """
+        Estado de la FORMULA, no de la orden.
+
+        Sin filas: no_aplica para historicas y sin_formula para las nuevas.
+        Con filas: lista mientras la orden esta Pendiente y, despues, el
+        estado de la orden (en_produccion, finalizada o cancelada).
+        """
+        if not self.referencias:
+            return (
+                EstadoFormula.NO_APLICA
+                if not self.formula_obligatoria
+                else EstadoFormula.SIN_FORMULA
+            )
+        if self.estado == EstadoOrden.PENDIENTE:
+            return EstadoFormula.LISTA
+        return self.estado
+
+    @property
     def destino_etiqueta(self) -> str:
         return DESTINO_ETIQUETAS.get(self.destino, self.destino)
 
     def __repr__(self) -> str:
         return f"<OrdenProduccion {self.numero_orden}>"
+
+
+class OrdenReferencia(Base):
+    """
+    Fila de la formula de una orden: cuantos bultos de esta referencia van
+    en cada tanda. La misma mezcla se repite en todas las tandas de la orden.
+
+    Peso, rendimiento y porcentaje se congelan al guardar la formula. Si
+    Bodega corrige el catalogo despues, la formula y las tandas ya creadas
+    conservan los valores con los que se planificaron.
+    """
+
+    __tablename__ = "orden_referencias"
+    __table_args__ = (
+        CheckConstraint("bultos_por_tanda > 0", name="ck_orden_ref_bultos_tanda"),
+        CheckConstraint("bultos_planificados > 0", name="ck_orden_ref_bultos_planificados"),
+        CheckConstraint(
+            "porcentaje_produccion_pct > 0 AND porcentaje_produccion_pct <= 100",
+            name="ck_orden_ref_pct",
+        ),
+        CheckConstraint("peso_promedio_bulto_kg > 0", name="ck_orden_ref_peso"),
+        CheckConstraint(
+            "rendimiento_fritura_pct > 0 AND rendimiento_fritura_pct <= 100",
+            name="ck_orden_ref_rendimiento",
+        ),
+        CheckConstraint(
+            "kg_crudos_por_tanda >= 0 AND kg_crudos_planificados >= 0",
+            name="ck_orden_ref_kg_crudos",
+        ),
+        CheckConstraint(
+            "kg_fritos_por_tanda >= 0 AND kg_fritos_estimados >= 0",
+            name="ck_orden_ref_kg_fritos",
+        ),
+        Index("ix_orden_referencias_orden", "orden_id"),
+        Index("ix_orden_referencias_referencia", "referencia_papa_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    orden_id: Mapped[int] = mapped_column(
+        ForeignKey("ordenes_produccion.id", ondelete="CASCADE")
+    )
+    orden: Mapped["OrdenProduccion"] = relationship(back_populates="referencias")
+
+    referencia_papa_id: Mapped[int] = mapped_column(ForeignKey("referencias_papa.id"))
+    referencia_papa: Mapped[ReferenciaPapa] = relationship(lazy="selectin")
+
+    bultos_por_tanda: Mapped[int] = mapped_column(Integer)
+    bultos_planificados: Mapped[int] = mapped_column(Integer)
+    porcentaje_produccion_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4))
+    peso_promedio_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    rendimiento_fritura_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4))
+    kg_crudos_por_tanda: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    kg_fritos_por_tanda: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    kg_crudos_planificados: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    kg_fritos_estimados: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+
+    creado_por_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    creado_por: Mapped["Usuario"] = relationship(foreign_keys=[creado_por_id], lazy="selectin")
+    fecha_creacion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<OrdenReferencia orden={self.orden_id} "
+            f"referencia={self.referencia_papa_id} bultos={self.bultos_por_tanda}>"
+        )
 
 
 class RegistroHorno(Base):
@@ -203,7 +324,11 @@ class RegistroHorno(Base):
     cantidad_bultos: Mapped[Decimal] = mapped_column(Numeric(6, 2))
     # Copias congeladas de los parametros de la referencia al crear la tanda.
     # Si bodega corrige la referencia despues, el historico no cambia.
-    peso_estandar_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    # En tandas multi-referencia estas columnas del padre quedan NULL: el
+    # detalle vive en registro_horno_referencias.
+    peso_estandar_bulto_kg: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 2), nullable=True
+    )
     rendimiento_fritura_pct: Mapped[Decimal | None] = mapped_column(
         Numeric(7, 4), nullable=True
     )
@@ -241,12 +366,78 @@ class RegistroHorno(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    referencias: Mapped[list["RegistroHornoReferencia"]] = relationship(
+        back_populates="registro_horno",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="RegistroHornoReferencia.id",
+    )
+
     desperdicios: Mapped[list["Desperdicio"]] = relationship(
         back_populates="registro_horno", lazy="selectin", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
         return f"<RegistroHorno {self.id} orden={self.orden_id}>"
+
+
+class RegistroHornoReferencia(Base):
+    """Detalle por referencia de una tanda. La cabecera guarda la suma."""
+
+    __tablename__ = "registro_horno_referencias"
+    __table_args__ = (
+        CheckConstraint("cantidad_bultos > 0", name="ck_registro_ref_bultos"),
+        CheckConstraint("peso_estandar_bulto_kg > 0", name="ck_registro_ref_peso"),
+        CheckConstraint(
+            "rendimiento_fritura_pct IS NULL OR "
+            "(rendimiento_fritura_pct > 0 AND rendimiento_fritura_pct <= 100)",
+            name="ck_registro_ref_rendimiento",
+        ),
+        CheckConstraint(
+            "porcentaje_produccion_pct IS NULL OR "
+            "(porcentaje_produccion_pct >= 0 AND porcentaje_produccion_pct <= 100)",
+            name="ck_registro_ref_participacion",
+        ),
+        CheckConstraint("kg_crudos_calculados >= 0", name="ck_registro_ref_kg_crudos"),
+        CheckConstraint(
+            "kg_fritos_estimados IS NULL OR kg_fritos_estimados >= 0",
+            name="ck_registro_ref_kg_fritos",
+        ),
+        Index("ix_registro_ref_registro", "registro_horno_id"),
+        Index("ix_registro_ref_referencia", "referencia_papa_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    registro_horno_id: Mapped[int] = mapped_column(
+        ForeignKey("registro_horno.id", ondelete="CASCADE")
+    )
+    registro_horno: Mapped["RegistroHorno"] = relationship(back_populates="referencias")
+
+    referencia_papa_id: Mapped[int] = mapped_column(ForeignKey("referencias_papa.id"))
+    referencia_papa: Mapped[ReferenciaPapa] = relationship(lazy="selectin")
+
+    cantidad_bultos: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    peso_estandar_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    rendimiento_fritura_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
+    porcentaje_produccion_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
+    kg_crudos_calculados: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    kg_fritos_estimados: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+
+    @property
+    def nombre(self) -> str:
+        return self.referencia_papa.nombre
+
+    def __repr__(self) -> str:
+        return (
+            f"<RegistroHornoReferencia registro={self.registro_horno_id} "
+            f"referencia={self.referencia_papa_id} bultos={self.cantidad_bultos}>"
+        )
 
 
 class Desperdicio(Base):

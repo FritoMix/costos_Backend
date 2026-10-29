@@ -553,6 +553,21 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
             },
         )
     )
+    # Bodega define la mezcla de 2 horas antes de que la orden pueda iniciar.
+    _json(
+        cliente.put(
+            f"{API}/ordenes/{orden_id}/formula",
+            json={
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 10,
+                    }
+                ],
+                "notas": "Mezcla de prueba",
+            },
+        )
+    )
     _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
     _json(cliente.get(f"{API}/ordenes"))
     _json(cliente.get(f"{API}/ordenes?estado=en_produccion"))
@@ -583,7 +598,7 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
             f"{API}/ordenes/{orden_id}/registros-horno/{registro['id']}",
             json={
                 "hora_inicio": "06:00:00",
-                "hora_fin": "07:30:00",
+                "hora_fin": "07:00:00",
                 "referencia_papa_id": datos_base.referencia_papa.id,
                 "cantidad_bultos": "11",
                 "operarios_seleccion": 2,
@@ -676,6 +691,21 @@ def test_los_registros_no_superan_las_horas_de_la_orden(cliente: TestClient, dat
         201,
     )
     orden_id = orden["id"]
+    # Fórmula holgada: la segunda tanda que se intenta después debe fallar por
+    # tiempo, no por bultos restantes.
+    _json(
+        cliente.put(
+            f"{API}/ordenes/{orden_id}/formula",
+            json={
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 20,
+                    }
+                ]
+            },
+        )
+    )
     _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
 
     datos_horno = {
@@ -779,3 +809,100 @@ def test_el_limite_por_ruta_de_exportacion_responde_429(cliente: TestClient):
     respuesta = cliente.get(f"{API}/analitica/exportar.csv")
     assert respuesta.status_code == 429
     assert "Demasiadas peticiones" in respuesta.json()["detail"]
+
+
+def test_formula_y_bandeja_respetan_los_permisos_de_bodega(
+    cliente: TestClient, datos_base, db: Session
+):
+    _login(cliente)
+    orden = _json(
+        cliente.post(
+            f"{API}/ordenes",
+            json={
+                "turno_id": datos_base.turno.id,
+                "horno_id": datos_base.horno.id,
+                "categoria_id": datos_base.categoria.id,
+                "producto_id": datos_base.producto.id,
+                "destino": "nacional",
+                "unidad_solicitada": "kg",
+                "cantidad_kg": "100.00",
+                "horas_produccion": 2,
+            },
+        ),
+        201,
+    )
+    orden_id = orden["id"]
+
+    # Sin fórmula, la lectura de producción devuelve el estado pendiente.
+    detalle = _json(cliente.get(f"{API}/ordenes/{orden_id}"))
+    assert detalle["formula"]["estado"] == "sin_formula"
+
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+
+    # Bodega ve su bandeja y define la fórmula, pero no entra a producción.
+    pendientes = _json(bodeguero.get(f"{API}/bodega/ordenes?solo_sin_formula=true"))
+    assert [fila["id"] for fila in pendientes] == [orden_id]
+
+    formula = _json(
+        bodeguero.put(
+            f"{API}/ordenes/{orden_id}/formula",
+            json={
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 10,
+                    }
+                ]
+            },
+        )
+    )
+    assert formula["estado"] == "lista"
+    assert formula["total_bultos_planificados"] == 20
+
+    detalle_bodega = _json(bodeguero.get(f"{API}/bodega/ordenes/{orden_id}"))
+    assert detalle_bodega["orden"]["formula_estado"] == "lista"
+    assert detalle_bodega["formula"]["total_bultos_por_tanda"] == 10
+
+    assert bodeguero.get(f"{API}/ordenes/{orden_id}").status_code == 403
+    assert bodeguero.get(f"{API}/ordenes/{orden_id}/formula").status_code == 403
+    assert bodeguero.get(f"{API}/ordenes/{orden_id}/registros-horno").status_code == 403
+    bodeguero.close()
+
+    # Los roles de producción sí leen la fórmula.
+    operario = TestClient(app)
+    _login(operario, "operario_horno_prueba")
+    leida = _json(operario.get(f"{API}/ordenes/{orden_id}/formula"))
+    assert leida["estado"] == "lista"
+    assert operario.put(
+        f"{API}/ordenes/{orden_id}/formula",
+        json={
+            "referencias": [
+                {
+                    "referencia_papa_id": datos_base.referencia_papa.id,
+                    "bultos_por_tanda": 5,
+                }
+            ]
+        },
+    ).status_code == 403
+    operario.close()
+
+    _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
+
+    # Con la producción iniciada la fórmula queda congelada.
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+    congelada = bodeguero.put(
+        f"{API}/ordenes/{orden_id}/formula",
+        json={
+            "referencias": [
+                {
+                    "referencia_papa_id": datos_base.referencia_papa.id,
+                    "bultos_por_tanda": 5,
+                }
+            ]
+        },
+    )
+    assert congelada.status_code == 400
+    assert "Pendiente" in congelada.json()["detail"]
+    bodeguero.close()

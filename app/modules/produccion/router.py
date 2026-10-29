@@ -14,9 +14,10 @@ Ver las ordenes lo pueden hacer los roles de produccion: administrador,
 supervisor y operarios. Bodega no consulta ordenes ni sus registros.
 """
 
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.errores import PermisoDenegado
@@ -24,6 +25,12 @@ from app.db.session import get_db
 from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.schemas import (
+    FormulaGuardar,
+    FormulaProyeccionGuardar,
+    FormulaProyeccionSalida,
+    FormulaSalida,
+    OrdenBodegaDetalle,
+    OrdenBodegaSalida,
     OrdenDetalle,
     OrdenGuardar,
     OrdenSalida,
@@ -32,6 +39,7 @@ from app.modules.produccion.schemas import (
     RegistroHornoGuardar,
     RegistroHornoSalida,
 )
+from app.modules.produccion.servicios import formula as servicio_formula
 from app.modules.produccion.servicios import horno as servicio_horno
 from app.modules.produccion.servicios import ordenes as servicio_ordenes
 from app.modules.produccion.servicios import saborizado as servicio_saborizado
@@ -72,7 +80,47 @@ TomaOrdenes = Annotated[
     ),
 ]
 
+# Bodega define la formula de la orden. No ve registros, aceite, desperdicios
+# ni costos: solo el encabezado, la formula y el avance.
+BodegaFormula = Annotated[
+    Usuario,
+    Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.BODEGUERO)),
+]
+
 router = APIRouter(prefix="/ordenes", tags=["Órdenes de producción"])
+router_bodega_ordenes = APIRouter(
+    prefix="/bodega/ordenes", tags=["Bodega · Fórmula de producción"]
+)
+
+
+@router_bodega_ordenes.get("", response_model=list[OrdenBodegaSalida])
+def listar_ordenes_bodega(
+    db: BD,
+    _: BodegaFormula,
+    fecha_desde: Annotated[date | None, Query()] = None,
+    fecha_hasta: Annotated[date | None, Query()] = None,
+    estado: Annotated[str | None, Query()] = None,
+    producto_id: Annotated[int | None, Query(gt=0)] = None,
+    destino: Annotated[str | None, Query()] = None,
+    solo_sin_formula: Annotated[bool, Query()] = False,
+):
+    """Bandeja de Bodega: ordenes con el estado de su formula y el avance."""
+    return servicio_formula.listar_ordenes_bodega(
+        db,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        estado=estado,
+        producto_id=producto_id,
+        destino=destino,
+        solo_sin_formula=solo_sin_formula,
+    )
+
+
+@router_bodega_ordenes.get("/{orden_id}", response_model=OrdenBodegaDetalle)
+def detalle_orden_bodega(orden_id: int, db: BD, _: BodegaFormula):
+    """Detalle restringido: encabezado, formula y avance, sin registros."""
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_formula.detalle_bodega(db, orden)
 
 
 def _verificar_puede_gestionar(orden, usuario: Usuario) -> None:
@@ -127,6 +175,7 @@ def detalle(orden_id: int, db: BD, _: VeOrdenes):
     return OrdenDetalle(
         orden=OrdenSalida.model_validate(orden),
         totales=servicio_totales.calcular_totales(db, orden),
+        formula=servicio_formula.obtener(db, orden),
         registros_horno=[
             RegistroHornoSalida.model_validate(r) for r in servicio_horno.listar_registros(db, orden.id)
         ],
@@ -175,6 +224,32 @@ def eliminar(orden_id: int, db: BD, admin: SoloAdmin) -> dict:
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     arrastrados = servicio_ordenes.eliminar_orden(db, orden, admin)
     return {"registros_eliminados": arrastrados}
+
+
+# --- Formula de produccion por orden --------------------------------------
+
+
+@router.get("/{orden_id}/formula", response_model=FormulaSalida)
+def obtener_formula(orden_id: int, db: BD, _: VeOrdenes):
+    """Formula vigente de la orden y avance por referencia."""
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_formula.obtener(db, orden)
+
+
+@router.put("/{orden_id}/formula", response_model=FormulaSalida)
+def guardar_formula(orden_id: int, datos: FormulaGuardar, db: BD, usuario: BodegaFormula):
+    """Bodega guarda (o reemplaza) la mezcla de ESA orden."""
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_formula.guardar(db, orden, datos, usuario)
+
+
+@router.post("/{orden_id}/formula/proyeccion", response_model=FormulaProyeccionSalida)
+def proyectar_formula(
+    orden_id: int, datos: FormulaProyeccionGuardar, db: BD, _: BodegaFormula
+):
+    """Vista previa de la mezcla o sugerencia; no guarda nada."""
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_formula.proyectar(db, orden, datos)
 
 
 # --- Registros de horno ----------------------------------------------------

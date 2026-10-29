@@ -119,7 +119,11 @@ def actualizar(
 
 
 def eliminar(db: Session, referencia_id: int) -> None:
-    from app.modules.produccion.models import RegistroHorno
+    from app.modules.produccion.models import (
+        OrdenReferencia,
+        RegistroHorno,
+        RegistroHornoReferencia,
+    )
 
     referencia = obtener(db, referencia_id)
     usada = db.scalar(
@@ -127,16 +131,28 @@ def eliminar(db: Session, referencia_id: int) -> None:
         .where(RegistroHorno.referencia_papa_id == referencia_id)
         .limit(1)
     )
+    if usada is None:
+        usada = db.scalar(
+            select(RegistroHornoReferencia.id)
+            .where(RegistroHornoReferencia.referencia_papa_id == referencia_id)
+            .limit(1)
+        )
+    if usada is None:
+        usada = db.scalar(
+            select(OrdenReferencia.id)
+            .where(OrdenReferencia.referencia_papa_id == referencia_id)
+            .limit(1)
+        )
     if usada is not None:
         raise ErrorDeValidacion(
-            f'No se puede eliminar "{referencia.nombre}": ya tiene tandas de horno '
-            "registradas. Puedes desactivarla en su lugar."
+            f'No se puede eliminar "{referencia.nombre}": se usa en una fórmula o en '
+            "una tanda de horno. Puedes desactivarla en su lugar."
         )
     db.delete(referencia)
     db.commit()
 
 
-def _capacidad_entera(horno: Horno) -> int:
+def capacidad_entera(horno: Horno) -> int:
     if horno.capacidad_bultos_hora is None:
         raise ErrorDeValidacion(
             f'El {horno.nombre} no tiene configurada su capacidad de bultos por hora. '
@@ -150,7 +166,7 @@ def _capacidad_entera(horno: Horno) -> int:
     return int(capacidad)
 
 
-def _validar_referencia_completa(referencia: ReferenciaPapa) -> None:
+def validar_referencia_completa(referencia: ReferenciaPapa) -> None:
     if (
         referencia.tipo is None
         or referencia.rendimiento_fritura_pct is None
@@ -180,7 +196,7 @@ def proyectar(db: Session, horno_id: int, horas: int = 1) -> ProyeccionProduccio
     if horas < 1:
         raise ErrorDeValidacion("El número de horas debe ser mínimo 1.")
 
-    capacidad_hora = _capacidad_entera(horno)
+    capacidad_hora = capacidad_entera(horno)
     referencias = listar(db, solo_activas=True)
     if not referencias:
         raise ErrorDeValidacion(
@@ -188,7 +204,7 @@ def proyectar(db: Session, horno_id: int, horas: int = 1) -> ProyeccionProduccio
         )
 
     for referencia in referencias:
-        _validar_referencia_completa(referencia)
+        validar_referencia_completa(referencia)
 
     participaciones = [
         Participacion(

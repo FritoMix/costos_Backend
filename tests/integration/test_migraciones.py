@@ -31,6 +31,8 @@ TABLAS_ESPERADAS = {
     "canastillas",
     "notificaciones",
     "referencias_papa",
+    "orden_referencias",
+    "registro_horno_referencias",
 }
 
 
@@ -59,3 +61,39 @@ def test_migraciones_son_idempotentes(engine_integracion):
     aplicadas = aplicar_migraciones_pendientes(engine_integracion, CARPETA_MIGRACIONES)
 
     assert aplicadas == 0
+
+
+def test_columnas_de_formula_y_tipos_de_aviso(engine_integracion):
+    with engine_integracion.connect() as conexion:
+        columnas = set(
+            conexion.scalars(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'ordenes_produccion'"
+                )
+            )
+        )
+        permitidos = conexion.scalar(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'ck_notificacion_tipo_valido'"
+            )
+        )
+        referencia_nullable = conexion.scalar(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'registro_horno' "
+                "AND column_name = 'referencia_papa_id'"
+            )
+        )
+
+    assert {
+        "formula_obligatoria",
+        "formula_notas",
+        "formula_actualizada_por_id",
+        "formula_fecha_actualizacion",
+    } <= columnas
+    assert "orden_para_bodega" in permitidos
+    assert "formula_lista" in permitidos
+    assert "orden_creada" in permitidos
+    assert referencia_nullable == "YES"
