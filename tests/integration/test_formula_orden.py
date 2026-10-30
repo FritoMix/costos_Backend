@@ -102,6 +102,9 @@ def test_bodega_guarda_y_consulta_la_formula_con_snapshots(
     assert formula.avance_bultos_porcentaje == Decimal("0.00")
     assert formula.actualizada_por.id == datos_base.bodeguero.id
     assert formula.fecha_actualizacion is not None
+    # La mezcla de la prueba produce más kg que los pedidos: se avisa al
+    # guardar, sin bloquear.
+    assert formula.advertencias
     fila = formula.referencias[0]
     assert fila.porcentaje_produccion_pct == Decimal("100.0000")
     assert fila.peso_promedio_bulto_kg == Decimal("50.00")
