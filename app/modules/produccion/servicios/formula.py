@@ -267,6 +267,23 @@ def guardar(
             f"máximo {capacidad}. Ajusta los bultos por referencia."
         )
 
+    # La capacidad del horno es un máximo físico, no un mínimo: si ni con la
+    # mejor referencia de la mezcla se alcanza la cantidad pedida, la fórmula
+    # no se guarda y el mensaje dice cuánto falta.
+    max_kg_por_bulto = max(
+        kg_fritos_por_bulto(referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct)
+        for referencia, _ in mezcla
+        if referencia.rendimiento_fritura_pct is not None
+    )
+    capacidad_kg = Decimal(capacidad * orden.horas_produccion) * max_kg_por_bulto
+    if capacidad_kg < orden.cantidad_programada:
+        raise ErrorDeValidacion(
+            "Con esta mezcla, la capacidad máxima produce "
+            f"{capacidad_kg.quantize(CENTAVOS)} kg y la orden pide "
+            f"{orden.cantidad_programada.quantize(CENTAVOS)} kg. "
+            "Ajusta la mezcla o pide más horas."
+        )
+
     # Se reemplaza la formula completa: una sola formula vigente por orden.
     orden.referencias.clear()
     db.flush()

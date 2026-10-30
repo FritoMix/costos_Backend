@@ -300,6 +300,24 @@ def test_la_proyeccion_advierte_sobreproduccion_sin_bloquear(
     assert "más de lo pedido" in (salida.mensaje or "").lower()
 
 
+def test_la_formula_no_se_guarda_si_la_capacidad_fisica_no_alcanza(
+    db, datos_base, orden_guardar
+):
+    orden = servicio_ordenes.crear_orden(
+        db, orden_guardar(cantidad_kg=Decimal("5000.00")), datos_base.supervisor
+    )
+
+    with pytest.raises(ErrorDeValidacion, match="capacidad máxima produce"):
+        servicio_formula.guardar(
+            db,
+            orden,
+            _formula((datos_base.referencia_papa, 1)),
+            datos_base.bodeguero,
+        )
+
+    assert orden.referencias == []
+
+
 def test_la_proyeccion_bloquea_cuando_la_capacidad_fisica_no_alcanza(
     db, datos_base, orden_guardar
 ):
@@ -498,6 +516,40 @@ def test_una_orden_de_n_horas_no_admite_la_tanda_n_mas_uno(
             _tanda(datos_base, inicio=time(7, 0), fin=time(7, 30)),
             datos_base.operario_horno,
         )
+
+
+def test_bajar_la_capacidad_del_horno_obliga_a_ajustar_la_formula(
+    db, datos_base, orden_guardar, guardar_formula
+):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    guardar_formula(orden)
+
+    datos_base.horno.capacidad_bultos_hora = Decimal("5.00")
+    db.flush()
+
+    with pytest.raises(ErrorDeValidacion, match="admite máximo 5"):
+        servicio_ordenes.editar_orden(
+            db, orden, orden_guardar(cantidad_kg=Decimal("90.00"))
+        )
+
+
+def test_eliminar_una_tanda_baja_el_avance_de_la_formula(
+    db, datos_base, orden_guardar, guardar_formula
+):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    guardar_formula(orden)
+    servicio_ordenes.iniciar_orden(db, orden)
+
+    registro = servicio_horno.crear_registro(
+        db, orden, _tanda(datos_base), datos_base.operario_horno
+    )
+    assert servicio_formula.obtener(db, orden).avance_bultos_porcentaje == Decimal("50.00")
+
+    servicio_horno.eliminar_registro(db, registro, datos_base.admin)
+
+    formula = servicio_formula.obtener(db, orden)
+    assert formula.avance_bultos_porcentaje == Decimal("0.00")
+    assert formula.total_bultos_producidos == Decimal("0")
 
 
 def test_la_formula_pasa_por_sus_estados_sin_perder_filas(
