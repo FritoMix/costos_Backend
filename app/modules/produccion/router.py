@@ -28,6 +28,7 @@ from app.modules.produccion.schemas import (
     FormulaGuardar,
     FormulaPapaGuardar,
     FormulaPapaSalida,
+    FormulaPapaSugerenciaSalida,
     FormulaProyeccionGuardar,
     FormulaProyeccionSalida,
     FormulaSalida,
@@ -136,6 +137,23 @@ def formula_activa_del_producto(
     """Fórmula activa del producto (la que verá el supervisor al crear la orden)."""
     return servicio_formulas_papa.activa_para_orden(
         db, producto_id=producto_id, horas=horas
+    )
+
+
+@router_bodega_formulas.post("/sugerir", response_model=FormulaPapaSugerenciaSalida)
+def sugerir_formula_papa(
+    db: BD,
+    _: GestionaFormulasPapa,
+    referencia_ids: Annotated[list[int], Query(min_length=1)],
+):
+    """Reparte la capacidad del horno entre las referencias según su participación."""
+    capacidad, filas = servicio_formulas_papa.sugerir_mezcla(db, referencia_ids)
+    return FormulaPapaSugerenciaSalida(
+        capacidad_bultos_hora=capacidad,
+        referencias=[
+            {"referencia_papa_id": referencia_id, "bultos_por_tanda": bultos}
+            for referencia_id, bultos in filas
+        ],
     )
 
 

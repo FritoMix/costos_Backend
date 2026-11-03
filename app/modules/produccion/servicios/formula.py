@@ -76,7 +76,7 @@ def _capacidad_maxima(horno: Horno, horas: int | None) -> int | None:
     return int(horno.capacidad_bultos_hora) * horas
 
 
-def _validar_referencia_formula(referencia: ReferenciaPapa) -> None:
+def validar_referencia_formula(referencia: ReferenciaPapa) -> None:
     if not referencia.activo:
         raise ErrorDeValidacion(
             f'La referencia "{referencia.nombre}" está inactiva. Actívala o elige otra.'
@@ -118,7 +118,7 @@ def resolver_mezcla(
         referencia = encontradas.get(fila.referencia_papa_id)
         if referencia is None:
             raise RecursoNoEncontrado("Esa referencia de papa no existe.")
-        _validar_referencia_formula(referencia)
+        validar_referencia_formula(referencia)
         resultado.append((referencia, fila.bultos_por_tanda))
     return resultado
 
@@ -446,7 +446,7 @@ def _referencias_para_sugerencia(db: Session) -> list[ReferenciaPapa]:
             "No hay referencias de papa activas. Bodega debe registrar al menos una."
         )
     for referencia in referencias:
-        _validar_referencia_formula(referencia)
+        validar_referencia_formula(referencia)
     return referencias
 
 

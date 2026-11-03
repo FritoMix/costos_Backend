@@ -157,6 +157,73 @@ def test_no_se_repite_el_nombre_en_el_mismo_producto(db, datos_base):
         servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
 
 
+def _segunda_referencia(
+    db, datos_base, *, porcentaje: str = "40.00", nombre: str = "Papa Pastusa de Prueba"
+) -> ReferenciaPapa:
+    referencia = ReferenciaPapa(
+        nombre=nombre,
+        tipo="Papa pastusa",
+        peso_promedio_bulto_kg=Decimal("40.00"),
+        rendimiento_fritura_pct=Decimal("30.00"),
+        porcentaje_produccion_pct=Decimal(porcentaje),
+        activo=True,
+    )
+    db.add(referencia)
+    db.flush()
+    return referencia
+
+
+def test_sugerir_reparte_la_capacidad_por_participacion(db, datos_base):
+    # pastusa 60 % / segunda 40 % sobre 50 bultos del horno → 30 / 20.
+    datos_base.referencia_papa.porcentaje_produccion_pct = Decimal("60.00")
+    segunda = _segunda_referencia(db, datos_base, porcentaje="40.00")
+    db.flush()
+
+    capacidad, filas = servicio_plantillas.sugerir_mezcla(
+        db, [datos_base.referencia_papa.id, segunda.id]
+    )
+
+    assert capacidad == 50
+    assert dict(filas) == {datos_base.referencia_papa.id: 30, segunda.id: 20}
+    assert sum(bultos for _, bultos in filas) == 50
+
+
+def test_sugerir_reparte_en_partes_iguales_si_la_participacion_no_suma_cien(db, datos_base):
+    datos_base.referencia_papa.porcentaje_produccion_pct = Decimal("80.00")
+    segunda = _segunda_referencia(db, datos_base, porcentaje="80.00")
+    db.flush()
+
+    capacidad, filas = servicio_plantillas.sugerir_mezcla(
+        db, [datos_base.referencia_papa.id, segunda.id]
+    )
+
+    assert capacidad == 50
+    assert dict(filas) == {datos_base.referencia_papa.id: 25, segunda.id: 25}
+
+
+def test_sugerir_exige_capacidad_y_referencias_validas(db, datos_base):
+    with pytest.raises(ErrorDeValidacion, match="al menos una referencia"):
+        servicio_plantillas.sugerir_mezcla(db, [])
+
+    with pytest.raises(ErrorDeValidacion, match="repetir"):
+        servicio_plantillas.sugerir_mezcla(
+            db, [datos_base.referencia_papa.id, datos_base.referencia_papa.id]
+        )
+
+    referencia_id = datos_base.referencia_papa.id
+    datos_base.referencia_papa.activo = False
+    db.flush()
+    with pytest.raises(ErrorDeValidacion, match="inactiva"):
+        servicio_plantillas.sugerir_mezcla(db, [referencia_id])
+    datos_base.referencia_papa.activo = True
+    db.flush()
+
+    datos_base.horno.capacidad_bultos_hora = None
+    db.flush()
+    with pytest.raises(ErrorDeValidacion, match="capacidad de bultos por hora"):
+        servicio_plantillas.sugerir_mezcla(db, [referencia_id])
+
+
 def test_listar_filtra_por_producto_y_valida_los_datos(db, datos_base):
     servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
 

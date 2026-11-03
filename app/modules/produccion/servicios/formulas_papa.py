@@ -19,16 +19,21 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
-from app.modules.catalogos.models import Producto
+from app.modules.bodega.models import ReferenciaPapa
+from app.modules.catalogos.models import Horno, Producto
 from app.modules.identidad.models import Usuario
 from app.modules.produccion.dominio.calculos import (
+    CIEN,
+    Participacion,
     calcular_kg_crudos,
     calcular_kg_fritos_estimados,
     calcular_porcentaje_desde_bultos,
+    distribuir_bultos,
+    validar_participaciones,
 )
 from app.modules.produccion.models import (
     FormulaPapa,
@@ -45,6 +50,7 @@ from app.modules.produccion.servicios.formula import (
     filas_de_mezcla,
     resolver_mezcla,
     validar_mezcla_en_horno,
+    validar_referencia_formula,
 )
 
 logger = logging.getLogger("datacontrol")
@@ -273,6 +279,80 @@ def eliminar(db: Session, formula: FormulaPapa) -> None:
         )
     db.delete(formula)
     db.commit()
+
+
+# --- Reparto de la capacidad ------------------------------------------------
+
+
+def capacidad_de_hornos(db: Session) -> int:
+    """
+    Capacidad de referencia para repartir una mezcla: la mayor capacidad
+    configurada entre los hornos activos. Las ordenes siguen validando contra
+    el horno que elija el supervisor.
+    """
+    capacidad = db.scalar(
+        select(func.max(Horno.capacidad_bultos_hora)).where(
+            Horno.activo.is_(True),
+            Horno.capacidad_bultos_hora.is_not(None),
+        )
+    )
+    if capacidad is None:
+        raise ErrorDeValidacion(
+            "Ningún horno activo tiene configurada su capacidad de bultos por hora. "
+            "Configúrala en Hornos para repartir la mezcla."
+        )
+    return int(capacidad)
+
+
+def sugerir_mezcla(db: Session, referencia_ids: list[int]) -> tuple[int, list[tuple[int, int]]]:
+    """
+    Reparte la capacidad del horno entre las referencias elegidas usando su
+    participación de Bodega. Si la participación no suma 100 %, reparte en
+    partes iguales. Devuelve (capacidad, [(referencia_id, bultos)]).
+    """
+    if not referencia_ids:
+        raise ErrorDeValidacion("Elige al menos una referencia para repartir la mezcla.")
+    if len(referencia_ids) != len(set(referencia_ids)):
+        raise ErrorDeValidacion("No puedes repetir una referencia en la misma fórmula.")
+
+    referencias = list(
+        db.scalars(
+            select(ReferenciaPapa).where(ReferenciaPapa.id.in_(referencia_ids))
+        ).all()
+    )
+    if len(referencias) != len(set(referencia_ids)):
+        raise RecursoNoEncontrado("Alguna referencia de papa no existe.")
+    for referencia in referencias:
+        validar_referencia_formula(referencia)
+
+    capacidad = capacidad_de_hornos(db)
+    participaciones: list[Participacion] | None = None
+    if all(referencia.porcentaje_produccion_pct is not None for referencia in referencias):
+        candidatas = [
+            Participacion(
+                referencia_id=referencia.id,
+                porcentaje=referencia.porcentaje_produccion_pct,
+            )
+            for referencia in referencias
+        ]
+        try:
+            validar_participaciones(candidatas)
+            participaciones = candidatas
+        except ErrorDeValidacion:
+            participaciones = None
+    if participaciones is None:
+        partes = CIEN / Decimal(len(referencias))
+        participaciones = [
+            Participacion(referencia_id=referencia.id, porcentaje=partes)
+            for referencia in referencias
+        ]
+
+    distribucion = distribuir_bultos(capacidad, participaciones)
+    return capacidad, [
+        (referencia.id, distribucion[referencia.id])
+        for referencia in referencias
+        if distribucion[referencia.id] > 0
+    ]
 
 
 # --- Integracion con la orden ------------------------------------------------

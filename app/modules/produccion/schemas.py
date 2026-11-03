@@ -217,6 +217,16 @@ class FormulaPapaSalida(BaseModel):
     fecha_actualizacion: datetime
 
 
+class FormulaPapaSugerenciaReferencia(BaseModel):
+    referencia_papa_id: int
+    bultos_por_tanda: int
+
+
+class FormulaPapaSugerenciaSalida(BaseModel):
+    capacidad_bultos_hora: int
+    referencias: list[FormulaPapaSugerenciaReferencia]
+
+
 class OrdenBodegaSalida(OrdenSalida):
     formula_notas: str | None
     total_bultos_planificados: int | None

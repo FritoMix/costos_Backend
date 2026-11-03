@@ -937,6 +937,17 @@ def test_formulas_papa_respetan_los_permisos(
     activas = _json(bodeguero.get(f"{API}/bodega/formulas-papa?solo_activas=true"))
     assert [formula["id"] for formula in activas] == [creada["id"]]
     _json(bodeguero.get(f"{API}/bodega/formulas-papa/{creada['id']}"))
+    # Reparte la capacidad del horno entre las referencias elegidas.
+    sugerencia = _json(
+        bodeguero.post(
+            f"{API}/bodega/formulas-papa/sugerir",
+            params={"referencia_ids": [datos_base.referencia_papa.id]},
+        )
+    )
+    assert sugerencia["capacidad_bultos_hora"] == 50
+    assert sugerencia["referencias"] == [
+        {"referencia_papa_id": datos_base.referencia_papa.id, "bultos_por_tanda": 50}
+    ]
     bodeguero.close()
 
     # El supervisor lee la activa del producto (la necesita al crear la orden)
