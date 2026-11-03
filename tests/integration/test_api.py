@@ -906,3 +906,68 @@ def test_formula_y_bandeja_respetan_los_permisos_de_bodega(
     assert congelada.status_code == 400
     assert "Pendiente" in congelada.json()["detail"]
     bodeguero.close()
+
+
+def test_formulas_papa_respetan_los_permisos(
+    cliente: TestClient, datos_base, db: Session
+):
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+
+    # Bodega crea y activa; la lista sale con la activa marcada.
+    creada = _json(
+        bodeguero.post(
+            f"{API}/bodega/formulas-papa",
+            json={
+                "nombre": "Fórmula API",
+                "producto_id": datos_base.producto.id,
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 10,
+                    }
+                ],
+                "notas": None,
+            },
+        ),
+        201,
+    )
+    assert creada["activa"] is False
+    _json(bodeguero.post(f"{API}/bodega/formulas-papa/{creada['id']}/activar"))
+    activas = _json(bodeguero.get(f"{API}/bodega/formulas-papa?solo_activas=true"))
+    assert [formula["id"] for formula in activas] == [creada["id"]]
+    _json(bodeguero.get(f"{API}/bodega/formulas-papa/{creada['id']}"))
+    bodeguero.close()
+
+    # El supervisor lee la activa del producto (la necesita al crear la orden)
+    # pero no puede escribir fórmulas.
+    supervisor = TestClient(app)
+    _login(supervisor, "supervisor_prueba")
+    activa = _json(
+        supervisor.get(
+            f"{API}/bodega/formulas-papa/activa",
+            params={"producto_id": datos_base.producto.id, "horas": 2},
+        )
+    )
+    assert activa["id"] == creada["id"]
+    assert activa["total_bultos_planificados"] == 20
+    assert supervisor.post(
+        f"{API}/bodega/formulas-papa",
+        json={
+            "nombre": "No permitida",
+            "producto_id": datos_base.producto.id,
+            "referencias": [
+                {
+                    "referencia_papa_id": datos_base.referencia_papa.id,
+                    "bultos_por_tanda": 5,
+                }
+            ],
+        },
+    ).status_code == 403
+    supervisor.close()
+
+    # Los operarios no ven el catálogo de Bodega.
+    operario = TestClient(app)
+    _login(operario, "operario_horno_prueba")
+    assert operario.get(f"{API}/bodega/formulas-papa").status_code == 403
+    operario.close()

@@ -33,6 +33,8 @@ TABLAS_ESPERADAS = {
     "referencias_papa",
     "orden_referencias",
     "registro_horno_referencias",
+    "formulas_papa",
+    "formula_papa_referencias",
 }
 
 
@@ -97,3 +99,25 @@ def test_columnas_de_formula_y_tipos_de_aviso(engine_integracion):
     assert "formula_lista" in permitidos
     assert "orden_creada" in permitidos
     assert referencia_nullable == "YES"
+
+
+def test_una_sola_formula_activa_por_producto(engine_integracion):
+    with engine_integracion.connect() as conexion:
+        definicion = conexion.scalar(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE indexname = 'ux_formula_papa_activa_por_producto'"
+            )
+        )
+        columna = conexion.scalar(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'ordenes_produccion' "
+                "AND column_name = 'formula_papa_id'"
+            )
+        )
+
+    assert definicion is not None
+    assert "UNIQUE" in definicion
+    assert "WHERE activa" in definicion
+    assert columna == "formula_papa_id"

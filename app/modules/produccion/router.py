@@ -26,6 +26,8 @@ from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.schemas import (
     FormulaGuardar,
+    FormulaPapaGuardar,
+    FormulaPapaSalida,
     FormulaProyeccionGuardar,
     FormulaProyeccionSalida,
     FormulaSalida,
@@ -40,6 +42,7 @@ from app.modules.produccion.schemas import (
     RegistroHornoSalida,
 )
 from app.modules.produccion.servicios import formula as servicio_formula
+from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
 from app.modules.produccion.servicios import horno as servicio_horno
 from app.modules.produccion.servicios import ordenes as servicio_ordenes
 from app.modules.produccion.servicios import saborizado as servicio_saborizado
@@ -87,10 +90,92 @@ BodegaFormula = Annotated[
     Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.BODEGUERO)),
 ]
 
+# Consultar las formulas reutilizables: Bodega las administra y el
+# supervisor necesita ver la activa al crear la orden.
+VeFormulasPapa = Annotated[
+    Usuario,
+    Depends(
+        requiere_roles(RolCodigo.ADMIN, RolCodigo.SUPERVISOR, RolCodigo.BODEGUERO)
+    ),
+]
+# Crear, editar, activar y eliminar formulas reutilizables: solo Bodega.
+GestionaFormulasPapa = Annotated[
+    Usuario,
+    Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.BODEGUERO)),
+]
+
 router = APIRouter(prefix="/ordenes", tags=["Órdenes de producción"])
 router_bodega_ordenes = APIRouter(
     prefix="/bodega/ordenes", tags=["Bodega · Fórmula de producción"]
 )
+router_bodega_formulas = APIRouter(
+    prefix="/bodega/formulas-papa", tags=["Bodega · Fórmulas por producto"]
+)
+
+
+@router_bodega_formulas.get("", response_model=list[FormulaPapaSalida])
+def listar_formulas_papa(
+    db: BD,
+    _: VeFormulasPapa,
+    producto_id: Annotated[int | None, Query(gt=0)] = None,
+    solo_activas: Annotated[bool, Query()] = False,
+):
+    """Catálogo de fórmulas reutilizables, con su estado de activación."""
+    return servicio_formulas_papa.listar(
+        db, producto_id=producto_id, solo_activas=solo_activas
+    )
+
+
+@router_bodega_formulas.get("/activa", response_model=FormulaPapaSalida | None)
+def formula_activa_del_producto(
+    db: BD,
+    _: VeFormulasPapa,
+    producto_id: Annotated[int, Query(gt=0)],
+    horas: Annotated[int | None, Query(ge=1, le=24)] = None,
+):
+    """Fórmula activa del producto (la que verá el supervisor al crear la orden)."""
+    return servicio_formulas_papa.activa_para_orden(
+        db, producto_id=producto_id, horas=horas
+    )
+
+
+@router_bodega_formulas.get("/{formula_id}", response_model=FormulaPapaSalida)
+def detalle_formula_papa(formula_id: int, db: BD, _: VeFormulasPapa):
+    return servicio_formulas_papa.detalle(db, formula_id)
+
+
+@router_bodega_formulas.post("", response_model=FormulaPapaSalida, status_code=status.HTTP_201_CREATED)
+def crear_formula_papa(datos: FormulaPapaGuardar, db: BD, usuario: GestionaFormulasPapa):
+    """Crea una fórmula reutilizable (nace inactiva)."""
+    return servicio_formulas_papa.crear(db, datos, usuario)
+
+
+@router_bodega_formulas.put("/{formula_id}", response_model=FormulaPapaSalida)
+def actualizar_formula_papa(
+    formula_id: int, datos: FormulaPapaGuardar, db: BD, _: GestionaFormulasPapa
+):
+    formula = servicio_formulas_papa.obtener(db, formula_id)
+    return servicio_formulas_papa.actualizar(db, formula, datos)
+
+
+@router_bodega_formulas.post("/{formula_id}/activar", response_model=FormulaPapaSalida)
+def activar_formula_papa(formula_id: int, db: BD, _: GestionaFormulasPapa):
+    """Activa esta fórmula y desactiva la que estuviera activa del producto."""
+    return servicio_formulas_papa.activar(
+        db, servicio_formulas_papa.obtener(db, formula_id)
+    )
+
+
+@router_bodega_formulas.post("/{formula_id}/desactivar", response_model=FormulaPapaSalida)
+def desactivar_formula_papa(formula_id: int, db: BD, _: GestionaFormulasPapa):
+    return servicio_formulas_papa.desactivar(
+        db, servicio_formulas_papa.obtener(db, formula_id)
+    )
+
+
+@router_bodega_formulas.delete("/{formula_id}", status_code=status.HTTP_204_NO_CONTENT)
+def eliminar_formula_papa(formula_id: int, db: BD, _: GestionaFormulasPapa) -> None:
+    servicio_formulas_papa.eliminar(db, servicio_formulas_papa.obtener(db, formula_id))
 
 
 @router_bodega_ordenes.get("", response_model=list[OrdenBodegaSalida])

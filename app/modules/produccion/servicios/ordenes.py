@@ -43,6 +43,7 @@ from app.modules.produccion.models import (
 )
 from app.modules.produccion.schemas import OrdenGuardar
 from app.modules.produccion.servicios import formula as servicio_formula
+from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
 from app.modules.produccion.servicios.registros import bloquear_orden
 
 logger = logging.getLogger("datacontrol")
@@ -222,14 +223,23 @@ def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenP
     db.commit()
     db.refresh(orden)
 
-    # Aviso a Bodega: hay una orden nueva pendiente de formula. A los
-    # operarios se les avisa despues, cuando la formula quede lista. Si algo
-    # falla al notificar, la orden YA quedo creada: se registra el problema
-    # pero no se le devuelve un error al supervisor.
+    # Si el producto tiene una formula activa de Bodega y cabe en el horno
+    # elegido, la orden nace con esa mezcla copiada y se avisa a horno y al
+    # supervisor. Si no hay activa (o no cabe), se pide a Bodega como antes.
+    # La orden YA quedo creada: si algo falla al aplicar o notificar, se
+    # registra el problema pero no se le devuelve un error al supervisor.
     try:
-        notificaciones.avisar_orden_para_bodega(db, orden)
+        aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
+        if aplicada:
+            notificaciones.avisar_formula_lista(db, orden)
+        else:
+            notificaciones.avisar_orden_para_bodega(db, orden)
     except Exception:  # noqa: BLE001
-        logger.exception("No se pudo avisar a Bodega de la orden %s", orden.numero_orden)
+        logger.exception("No se pudo preparar la fórmula de la orden %s", orden.numero_orden)
+        try:
+            notificaciones.avisar_orden_para_bodega(db, orden)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo avisar a Bodega de la orden %s", orden.numero_orden)
 
     return orden
 

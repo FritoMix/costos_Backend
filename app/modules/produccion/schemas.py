@@ -174,6 +174,49 @@ class FormulaProyeccionSalida(BaseModel):
     referencias: list[FormulaProyeccionReferencia]
 
 
+class FormulaPapaReferenciaGuardar(BaseModel):
+    referencia_papa_id: int = Field(gt=0)
+    bultos_por_tanda: int = Field(gt=0)
+
+
+class FormulaPapaGuardar(BaseModel):
+    nombre: str = Field(min_length=1, max_length=150)
+    producto_id: int = Field(gt=0)
+    referencias: list[FormulaPapaReferenciaGuardar] = Field(min_length=1)
+    notas: str | None = Field(default=None, max_length=500)
+
+
+class FormulaPapaReferenciaSalida(BaseModel):
+    referencia_id: int
+    nombre: str
+    tipo: str | None
+    bultos_por_tanda: int
+    porcentaje_produccion_pct: Decimal
+    peso_promedio_bulto_kg: Decimal
+    rendimiento_fritura_pct: Decimal
+    kg_crudos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal
+
+
+class FormulaPapaSalida(BaseModel):
+    id: int
+    nombre: str
+    producto: ProductoRef
+    activa: bool
+    notas: str | None
+    referencias: list[FormulaPapaReferenciaSalida]
+    total_bultos_por_tanda: int
+    total_kg_crudos: Decimal
+    total_kg_fritos_estimados: Decimal
+    horas: int | None = None
+    total_bultos_planificados: int | None = None
+    total_kg_crudos_planificados: Decimal | None = None
+    total_kg_fritos_planificados: Decimal | None = None
+    creado_por: UsuarioRef | None
+    fecha_creacion: datetime
+    fecha_actualizacion: datetime
+
+
 class OrdenBodegaSalida(OrdenSalida):
     formula_notas: str | None
     total_bultos_planificados: int | None

@@ -94,10 +94,16 @@ def _validar_referencia_formula(referencia: ReferenciaPapa) -> None:
         )
 
 
-def _referencias_de_formula(
-    db: Session, datos: FormulaGuardar
+def resolver_mezcla(
+    db: Session,
+    filas: list,
 ) -> list[tuple[ReferenciaPapa, int]]:
-    ids = [fila.referencia_papa_id for fila in datos.referencias]
+    """
+    Referencias del catalogo con sus bultos, validando repetidas, existentes,
+    activas y completas. Lo comparten la formula de la orden y las plantillas
+    reutilizables de Bodega.
+    """
+    ids = [fila.referencia_papa_id for fila in filas]
     if len(ids) != len(set(ids)):
         raise ErrorDeValidacion("No puedes repetir una referencia en la misma fórmula.")
 
@@ -108,13 +114,19 @@ def _referencias_de_formula(
         ).all()
     }
     resultado: list[tuple[ReferenciaPapa, int]] = []
-    for fila in datos.referencias:
+    for fila in filas:
         referencia = encontradas.get(fila.referencia_papa_id)
         if referencia is None:
             raise RecursoNoEncontrado("Esa referencia de papa no existe.")
         _validar_referencia_formula(referencia)
         resultado.append((referencia, fila.bultos_por_tanda))
     return resultado
+
+
+def _referencias_de_formula(
+    db: Session, datos: FormulaGuardar
+) -> list[tuple[ReferenciaPapa, int]]:
+    return resolver_mezcla(db, datos.referencias)
 
 
 def _filas_desde_orden(
@@ -191,6 +203,87 @@ def _tandas_registradas(db: Session, orden_id: int) -> int:
     )
 
 
+def validar_mezcla_en_horno(
+    mezcla: list[tuple[ReferenciaPapa, int]],
+    *,
+    horno: Horno,
+    horas_produccion: int | None,
+    cantidad_programada: Decimal,
+) -> None:
+    """
+    Reglas fisicas compartidas por la formula de la orden y las plantillas:
+    la tanda no supera la capacidad y la capacidad total debe alcanzar la
+    cantidad pedida. Lanza ErrorDeValidacion con el motivo.
+    """
+    if horno.capacidad_bultos_hora is None:
+        raise ErrorDeValidacion(
+            f'El {horno.nombre} no tiene configurada su capacidad de bultos por hora. '
+            "Configúrala en Hornos antes de guardar la fórmula."
+        )
+    if not horas_produccion or horas_produccion < 1:
+        raise ErrorDeValidacion("La orden debe tener al menos una hora programada.")
+
+    capacidad = _capacidad(horno)
+    total_por_tanda = sum(bultos for _, bultos in mezcla)
+    if total_por_tanda > capacidad:
+        raise ErrorDeValidacion(
+            f"La mezcla carga {total_por_tanda} bultos por tanda y el horno admite "
+            f"máximo {capacidad}. Ajusta los bultos por referencia."
+        )
+
+    # La capacidad del horno es un maximo fisico, no un minimo: si ni con la
+    # mejor referencia de la mezcla se alcanza la cantidad pedida, no se
+    # guarda y el mensaje dice cuanto produce como maximo.
+    max_kg_por_bulto = max(
+        kg_fritos_por_bulto(referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct)
+        for referencia, _ in mezcla
+        if referencia.rendimiento_fritura_pct is not None
+    )
+    capacidad_kg = Decimal(capacidad * horas_produccion) * max_kg_por_bulto
+    if capacidad_kg < cantidad_programada:
+        raise ErrorDeValidacion(
+            "Con esta mezcla, la capacidad máxima produce "
+            f"{capacidad_kg.quantize(CENTAVOS)} kg y la orden pide "
+            f"{cantidad_programada.quantize(CENTAVOS)} kg. "
+            "Ajusta la mezcla o pide más horas."
+        )
+
+
+def filas_de_mezcla(
+    orden: OrdenProduccion,
+    mezcla: list[tuple[ReferenciaPapa, int]],
+    usuario_id: int,
+) -> list[OrdenReferencia]:
+    """Arma las filas de la formula de la orden con los snapshots del catalogo."""
+    total_por_tanda = sum(bultos for _, bultos in mezcla)
+    horas = orden.horas_produccion or 1
+    filas: list[OrdenReferencia] = []
+    for referencia, bultos in mezcla:
+        rendimiento = referencia.rendimiento_fritura_pct
+        if rendimiento is None:  # ya validado, pero deja el tipo claro
+            continue
+        kg_crudos = calcular_kg_crudos(bultos, referencia.peso_promedio_bulto_kg)
+        kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
+        filas.append(
+            OrdenReferencia(
+                referencia_papa_id=referencia.id,
+                bultos_por_tanda=bultos,
+                bultos_planificados=bultos * horas,
+                porcentaje_produccion_pct=calcular_porcentaje_desde_bultos(
+                    bultos, total_por_tanda
+                ),
+                peso_promedio_bulto_kg=referencia.peso_promedio_bulto_kg,
+                rendimiento_fritura_pct=rendimiento,
+                kg_crudos_por_tanda=kg_crudos,
+                kg_fritos_por_tanda=kg_fritos,
+                kg_crudos_planificados=(kg_crudos * horas).quantize(CENTAVOS),
+                kg_fritos_estimados=(kg_fritos * horas).quantize(CENTAVOS),
+                creado_por_id=usuario_id,
+            )
+        )
+    return filas
+
+
 # --- Lectura y guardado ------------------------------------------------------
 
 
@@ -250,70 +343,18 @@ def guardar(
         raise ErrorDeValidacion(
             "La fórmula solo se puede definir o corregir mientras la orden esté Pendiente."
         )
-    if not orden.horas_produccion or orden.horas_produccion < 1:
-        raise ErrorDeValidacion("La orden debe tener al menos una hora programada.")
-    if orden.horno.capacidad_bultos_hora is None:
-        raise ErrorDeValidacion(
-            f'El {orden.horno.nombre} no tiene configurada su capacidad de bultos por hora. '
-            "Configúrala en Hornos antes de guardar la fórmula."
-        )
-
     mezcla = _referencias_de_formula(db, datos)
-    total_por_tanda = sum(bultos for _, bultos in mezcla)
-    capacidad = _capacidad(orden.horno)
-    if total_por_tanda > capacidad:
-        raise ErrorDeValidacion(
-            f"La mezcla carga {total_por_tanda} bultos por tanda y el horno admite "
-            f"máximo {capacidad}. Ajusta los bultos por referencia."
-        )
-
-    # La capacidad del horno es un máximo físico, no un mínimo: si ni con la
-    # mejor referencia de la mezcla se alcanza la cantidad pedida, la fórmula
-    # no se guarda y el mensaje dice cuánto falta.
-    max_kg_por_bulto = max(
-        kg_fritos_por_bulto(referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct)
-        for referencia, _ in mezcla
-        if referencia.rendimiento_fritura_pct is not None
+    validar_mezcla_en_horno(
+        mezcla,
+        horno=orden.horno,
+        horas_produccion=orden.horas_produccion,
+        cantidad_programada=orden.cantidad_programada,
     )
-    capacidad_kg = Decimal(capacidad * orden.horas_produccion) * max_kg_por_bulto
-    if capacidad_kg < orden.cantidad_programada:
-        raise ErrorDeValidacion(
-            "Con esta mezcla, la capacidad máxima produce "
-            f"{capacidad_kg.quantize(CENTAVOS)} kg y la orden pide "
-            f"{orden.cantidad_programada.quantize(CENTAVOS)} kg. "
-            "Ajusta la mezcla o pide más horas."
-        )
 
     # Se reemplaza la formula completa: una sola formula vigente por orden.
     orden.referencias.clear()
     db.flush()
-    for referencia, bultos in mezcla:
-        rendimiento = referencia.rendimiento_fritura_pct
-        if rendimiento is None:  # ya validado, pero deja el tipo claro
-            continue
-        kg_crudos = calcular_kg_crudos(bultos, referencia.peso_promedio_bulto_kg)
-        kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
-        orden.referencias.append(
-            OrdenReferencia(
-                referencia_papa_id=referencia.id,
-                bultos_por_tanda=bultos,
-                bultos_planificados=bultos * orden.horas_produccion,
-                porcentaje_produccion_pct=calcular_porcentaje_desde_bultos(
-                    bultos, total_por_tanda
-                ),
-                peso_promedio_bulto_kg=referencia.peso_promedio_bulto_kg,
-                rendimiento_fritura_pct=rendimiento,
-                kg_crudos_por_tanda=kg_crudos,
-                kg_fritos_por_tanda=kg_fritos,
-                kg_crudos_planificados=(kg_crudos * orden.horas_produccion).quantize(
-                    CENTAVOS
-                ),
-                kg_fritos_estimados=(kg_fritos * orden.horas_produccion).quantize(
-                    CENTAVOS
-                ),
-                creado_por_id=usuario.id,
-            )
-        )
+    orden.referencias.extend(filas_de_mezcla(orden, mezcla, usuario.id))
 
     orden.formula_notas = (datos.notas or "").strip() or None
     orden.formula_actualizada_por_id = usuario.id

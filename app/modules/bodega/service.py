@@ -120,6 +120,7 @@ def actualizar(
 
 def eliminar(db: Session, referencia_id: int) -> None:
     from app.modules.produccion.models import (
+        FormulaPapaReferencia,
         OrdenReferencia,
         RegistroHorno,
         RegistroHornoReferencia,
@@ -141,6 +142,12 @@ def eliminar(db: Session, referencia_id: int) -> None:
         usada = db.scalar(
             select(OrdenReferencia.id)
             .where(OrdenReferencia.referencia_papa_id == referencia_id)
+            .limit(1)
+        )
+    if usada is None:
+        usada = db.scalar(
+            select(FormulaPapaReferencia.id)
+            .where(FormulaPapaReferencia.referencia_papa_id == referencia_id)
             .limit(1)
         )
     if usada is not None:
