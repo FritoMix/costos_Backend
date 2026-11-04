@@ -170,6 +170,12 @@ def _filas_desde_formula(
                 f"{ya_producido}. Solo quedan {restante}; esta tanda pide {bultos}."
             )
         kg_crudos = calcular_kg_crudos(bultos, fila_formula.peso_promedio_bulto_kg)
+        if fila_formula.rendimiento_fritura_pct is None:
+            kg_fritos = None
+        else:
+            kg_fritos = calcular_kg_fritos_estimados(
+                kg_crudos, fila_formula.rendimiento_fritura_pct
+            )
         filas.append(
             RegistroHornoReferencia(
                 referencia_papa_id=referencia_id,
@@ -178,9 +184,7 @@ def _filas_desde_formula(
                 rendimiento_fritura_pct=fila_formula.rendimiento_fritura_pct,
                 porcentaje_produccion_pct=fila_formula.porcentaje_produccion_pct,
                 kg_crudos_calculados=kg_crudos,
-                kg_fritos_estimados=calcular_kg_fritos_estimados(
-                    kg_crudos, fila_formula.rendimiento_fritura_pct
-                ),
+                kg_fritos_estimados=kg_fritos,
             )
         )
     return filas
@@ -204,19 +208,6 @@ def _filas_desde_catalogo(
     if not referencia.activo and referencia.id != registro.referencia_papa_id:
         raise ErrorDeValidacion(
             "La referencia de papa seleccionada está inactiva. Elige otra."
-        )
-    parametros_incompletos = (
-        referencia.rendimiento_fritura_pct is None
-        or referencia.porcentaje_produccion_pct is None
-    )
-    # Las tandas NUEVAS exigen la referencia completa. Una tanda historica
-    # (ya tiene id) puede corregirse aunque su referencia sea anterior a V9:
-    # se conserva el rendimiento NULL y no se inventan kg fritos.
-    if parametros_incompletos and registro.id is None:
-        raise ErrorDeValidacion(
-            f'La referencia "{referencia.nombre}" todavía no tiene configurados el '
-            "rendimiento de fritura y la participación. Pídele a Bodega que complete "
-            "sus parámetros antes de registrar la tanda."
         )
 
     kg_crudos = calcular_kg_crudos(bultos, referencia.peso_promedio_bulto_kg)

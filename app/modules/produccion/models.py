@@ -281,11 +281,13 @@ class OrdenReferencia(Base):
     bultos_planificados: Mapped[int] = mapped_column(Integer)
     porcentaje_produccion_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4))
     peso_promedio_bulto_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
-    rendimiento_fritura_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4))
+    # El rendimiento y los kg fritos son NULL cuando la referencia no tiene
+    # rendimiento configurado (Bodega ya no lo captura).
+    rendimiento_fritura_pct: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
     kg_crudos_por_tanda: Mapped[Decimal] = mapped_column(Numeric(10, 2))
-    kg_fritos_por_tanda: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    kg_fritos_por_tanda: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     kg_crudos_planificados: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    kg_fritos_estimados: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    kg_fritos_estimados: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
 
     creado_por_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
     creado_por: Mapped["Usuario"] = relationship(foreign_keys=[creado_por_id], lazy="selectin")

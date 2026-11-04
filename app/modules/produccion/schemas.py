@@ -108,11 +108,12 @@ class FormulaReferenciaSalida(BaseModel):
     bultos_planificados: int
     porcentaje_produccion_pct: Decimal
     peso_promedio_bulto_kg: Decimal
-    rendimiento_fritura_pct: Decimal
+    # NULL cuando la referencia no tiene rendimiento configurado.
+    rendimiento_fritura_pct: Decimal | None
     kg_crudos_por_tanda: Decimal
-    kg_fritos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal | None
     kg_crudos_planificados: Decimal
-    kg_fritos_estimados: Decimal
+    kg_fritos_estimados: Decimal | None
     bultos_producidos: Decimal
     bultos_restantes: Decimal
 
@@ -127,7 +128,7 @@ class FormulaSalida(BaseModel):
     total_bultos_por_tanda: int
     total_bultos_planificados: int
     total_kg_crudos: Decimal
-    total_kg_fritos_estimados: Decimal
+    total_kg_fritos_estimados: Decimal | None
     total_bultos_producidos: Decimal
     avance_bultos_porcentaje: Decimal | None
     tandas_registradas: int
@@ -149,11 +150,11 @@ class FormulaProyeccionReferencia(BaseModel):
     bultos_por_tanda: int
     porcentaje_produccion_pct: Decimal
     peso_promedio_bulto_kg: Decimal
-    rendimiento_fritura_pct: Decimal
+    rendimiento_fritura_pct: Decimal | None
     kg_crudos_por_tanda: Decimal
-    kg_fritos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal | None
     kg_crudos_planificados: Decimal
-    kg_fritos_estimados: Decimal
+    kg_fritos_estimados: Decimal | None
 
 
 class FormulaProyeccionSalida(BaseModel):
@@ -164,10 +165,10 @@ class FormulaProyeccionSalida(BaseModel):
     total_bultos_planificados: int
     kg_fritos_por_bulto_promedio: Decimal
     total_kg_crudos: Decimal
-    total_kg_fritos_estimados: Decimal
+    total_kg_fritos_estimados: Decimal | None
     cantidad_programada: Decimal
-    diferencia_kg: Decimal
-    diferencia_pct: Decimal
+    diferencia_kg: Decimal | None
+    diferencia_pct: Decimal | None
     tandas_programadas: int
     factible: bool
     mensaje: str | None
@@ -193,9 +194,9 @@ class FormulaPapaReferenciaSalida(BaseModel):
     bultos_por_tanda: int
     porcentaje_produccion_pct: Decimal
     peso_promedio_bulto_kg: Decimal
-    rendimiento_fritura_pct: Decimal
+    rendimiento_fritura_pct: Decimal | None
     kg_crudos_por_tanda: Decimal
-    kg_fritos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal | None
 
 
 class FormulaPapaSalida(BaseModel):
@@ -207,7 +208,7 @@ class FormulaPapaSalida(BaseModel):
     referencias: list[FormulaPapaReferenciaSalida]
     total_bultos_por_tanda: int
     total_kg_crudos: Decimal
-    total_kg_fritos_estimados: Decimal
+    total_kg_fritos_estimados: Decimal | None
     horas: int | None = None
     total_bultos_planificados: int | None = None
     total_kg_crudos_planificados: Decimal | None = None

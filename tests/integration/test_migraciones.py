@@ -101,6 +101,27 @@ def test_columnas_de_formula_y_tipos_de_aviso(engine_integracion):
     assert referencia_nullable == "YES"
 
 
+def test_rendimiento_y_kg_fritos_opcionales_en_la_formula(engine_integracion):
+    with engine_integracion.connect() as conexion:
+        nullable = dict(
+            conexion.execute(
+                text(
+                    "SELECT column_name, is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'orden_referencias' AND column_name IN "
+                    "('rendimiento_fritura_pct', 'kg_fritos_por_tanda', 'kg_fritos_estimados')"
+                )
+            ).all()
+        )
+
+    # Bodega dejo de capturar el rendimiento: las formulas nuevas guardan
+    # NULL y los kg fritos se estiman solo si el rendimiento existe.
+    assert nullable == {
+        "rendimiento_fritura_pct": "YES",
+        "kg_fritos_por_tanda": "YES",
+        "kg_fritos_estimados": "YES",
+    }
+
+
 def test_una_sola_formula_activa_por_producto(engine_integracion):
     with engine_integracion.connect() as conexion:
         definicion = conexion.scalar(

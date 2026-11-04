@@ -326,7 +326,7 @@ def test_la_tanda_usa_y_congela_los_parametros_de_la_formula(
     assert fila.kg_fritos_estimados == Decimal("120.00")
 
 
-def test_una_referencia_historica_sin_parametros_no_se_usa_en_tandas_nuevas(
+def test_una_referencia_sin_rendimiento_registra_la_tanda_sin_kg_fritos(
     db, datos_base, orden_guardar
 ):
     orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
@@ -340,13 +340,19 @@ def test_una_referencia_historica_sin_parametros_no_se_usa_en_tandas_nuevas(
     referencia.porcentaje_produccion_pct = None
     db.flush()
 
-    with pytest.raises(ErrorDeValidacion, match="todavía no tiene configurados"):
-        servicio_horno.crear_registro(
-            db,
-            orden,
-            _registro_horno(referencia_papa_id=referencia.id),
-            datos_base.operario_horno,
-        )
+    registro = servicio_horno.crear_registro(
+        db,
+        orden,
+        _registro_horno(referencia_papa_id=referencia.id),
+        datos_base.operario_horno,
+    )
+
+    # Bodega ya no captura rendimiento: la tanda se registra con los kg
+    # crudos y sin inventar kg fritos.
+    assert registro.kg_crudos_calculados == Decimal("500.00")
+    assert registro.kg_fritos_estimados is None
+    assert registro.referencias[0].rendimiento_fritura_pct is None
+    assert registro.referencias[0].kg_fritos_estimados is None
 
 
 def test_una_tanda_historica_sin_rendimiento_se_puede_corregir(

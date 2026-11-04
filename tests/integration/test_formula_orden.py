@@ -218,20 +218,26 @@ def test_formula_rechaza_referencia_inactiva(
         )
 
 
-def test_formula_rechaza_referencia_incompleta(
-    db, datos_base, orden_guardar
+def test_formula_acepta_referencia_sin_tipo_ni_rendimiento(
+    db, datos_base, orden_guardar, guardar_formula
 ):
-    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    # Bodega ya no captura tipo, rendimiento ni participación: la fórmula se
+    # guarda solo con el peso por bulto y los kg fritos quedan sin estimar.
     datos_base.referencia_papa.tipo = None
+    datos_base.referencia_papa.rendimiento_fritura_pct = None
+    datos_base.referencia_papa.porcentaje_produccion_pct = None
     db.flush()
 
-    with pytest.raises(ErrorDeValidacion, match="incompleta"):
-        servicio_formula.guardar(
-            db,
-            orden,
-            _formula((datos_base.referencia_papa, 10)),
-            datos_base.bodeguero,
-        )
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    guardar_formula(orden)
+
+    formula = servicio_formula.obtener(db, orden)
+    fila = formula.referencias[0]
+    assert fila.rendimiento_fritura_pct is None
+    assert fila.kg_fritos_por_tanda is None
+    assert fila.kg_crudos_planificados == Decimal("1000.00")
+    assert formula.total_kg_fritos_estimados is None
+    assert formula.advertencias == []
 
 
 def test_formula_rechaza_mezcla_mayor_que_la_capacidad(

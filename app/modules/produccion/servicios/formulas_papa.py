@@ -67,14 +67,17 @@ def salida(formula: FormulaPapa, horas: int | None = None) -> FormulaPapaSalida:
     total_bultos = sum(fila.bultos_por_tanda for fila in formula.referencias)
     total_crudos = Decimal("0")
     total_fritos = Decimal("0")
+    falta_rendimiento = False
     for fila in formula.referencias:
         referencia = fila.referencia_papa
-        if referencia.rendimiento_fritura_pct is None:
-            continue
         kg_crudos = calcular_kg_crudos(fila.bultos_por_tanda, referencia.peso_promedio_bulto_kg)
-        kg_fritos = calcular_kg_fritos_estimados(kg_crudos, referencia.rendimiento_fritura_pct)
         total_crudos += kg_crudos
-        total_fritos += kg_fritos
+        if referencia.rendimiento_fritura_pct is None:
+            falta_rendimiento = True
+            kg_fritos = None
+        else:
+            kg_fritos = calcular_kg_fritos_estimados(kg_crudos, referencia.rendimiento_fritura_pct)
+            total_fritos += kg_fritos
         filas.append(
             FormulaPapaReferenciaSalida(
                 referencia_id=referencia.id,
@@ -92,6 +95,7 @@ def salida(formula: FormulaPapa, horas: int | None = None) -> FormulaPapaSalida:
         )
 
     planificados_bultos = total_bultos * horas if horas else None
+    total_fritos_estimado = None if falta_rendimiento else total_fritos.quantize(CENTAVOS)
     return FormulaPapaSalida(
         id=formula.id,
         nombre=formula.nombre,
@@ -101,14 +105,14 @@ def salida(formula: FormulaPapa, horas: int | None = None) -> FormulaPapaSalida:
         referencias=filas,
         total_bultos_por_tanda=total_bultos,
         total_kg_crudos=total_crudos.quantize(CENTAVOS),
-        total_kg_fritos_estimados=total_fritos.quantize(CENTAVOS),
+        total_kg_fritos_estimados=total_fritos_estimado,
         horas=horas,
         total_bultos_planificados=planificados_bultos,
         total_kg_crudos_planificados=(
             (total_crudos * horas).quantize(CENTAVOS) if horas else None
         ),
         total_kg_fritos_planificados=(
-            (total_fritos * horas).quantize(CENTAVOS) if horas else None
+            (total_fritos * horas).quantize(CENTAVOS) if horas and not falta_rendimiento else None
         ),
         creado_por=(
             UsuarioRef.model_validate(formula.creado_por) if formula.creado_por else None

@@ -77,20 +77,19 @@ def _capacidad_maxima(horno: Horno, horas: int | None) -> int | None:
 
 
 def validar_referencia_formula(referencia: ReferenciaPapa) -> None:
+    """
+    La referencia solo necesita estar activa y tener peso por bulto; el tipo,
+    el rendimiento y la participacion dejaron de capturarse en Bodega. Sin
+    rendimiento, los kg fritos quedan sin estimar (se muestran como "—").
+    """
     if not referencia.activo:
         raise ErrorDeValidacion(
             f'La referencia "{referencia.nombre}" está inactiva. Actívala o elige otra.'
         )
-    if (
-        referencia.tipo is None
-        or referencia.tipo.strip() == ""
-        or referencia.rendimiento_fritura_pct is None
-        or referencia.rendimiento_fritura_pct <= 0
-        or referencia.peso_promedio_bulto_kg <= 0
-    ):
+    if referencia.peso_promedio_bulto_kg is None or referencia.peso_promedio_bulto_kg <= 0:
         raise ErrorDeValidacion(
-            f'La referencia "{referencia.nombre}" está incompleta: configura tipo, '
-            "peso por bulto y rendimiento de fritura antes de usarla en una fórmula."
+            f'La referencia "{referencia.nombre}" está incompleta: configura el '
+            "peso promedio por bulto antes de usarla en una fórmula."
         )
 
 
@@ -169,10 +168,10 @@ def _filas_desde_orden(
 
 def _advertencias(
     *,
-    total_kg_fritos: Decimal,
+    total_kg_fritos: Decimal | None,
     cantidad_programada: Decimal,
 ) -> list[str]:
-    if cantidad_programada <= 0:
+    if total_kg_fritos is None or cantidad_programada <= 0:
         return []
     diferencia = total_kg_fritos - cantidad_programada
     diferencia_pct = (diferencia / cantidad_programada * CIEN).quantize(CUATRO_DECIMALES)
@@ -233,12 +232,16 @@ def validar_mezcla_en_horno(
 
     # La capacidad del horno es un maximo fisico, no un minimo: si ni con la
     # mejor referencia de la mezcla se alcanza la cantidad pedida, no se
-    # guarda y el mensaje dice cuanto produce como maximo.
-    max_kg_por_bulto = max(
+    # guarda y el mensaje dice cuanto produce como maximo. Sin rendimiento
+    # configurado no hay forma de estimar kg fritos: se omite esta validacion.
+    kg_por_bulto = [
         kg_fritos_por_bulto(referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct)
         for referencia, _ in mezcla
         if referencia.rendimiento_fritura_pct is not None
-    )
+    ]
+    if not kg_por_bulto:
+        return
+    max_kg_por_bulto = max(kg_por_bulto)
     capacidad_kg = Decimal(capacidad * horas_produccion) * max_kg_por_bulto
     if capacidad_kg < cantidad_programada:
         raise ErrorDeValidacion(
@@ -260,10 +263,11 @@ def filas_de_mezcla(
     filas: list[OrdenReferencia] = []
     for referencia, bultos in mezcla:
         rendimiento = referencia.rendimiento_fritura_pct
-        if rendimiento is None:  # ya validado, pero deja el tipo claro
-            continue
         kg_crudos = calcular_kg_crudos(bultos, referencia.peso_promedio_bulto_kg)
-        kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
+        if rendimiento is None:
+            kg_fritos = None
+        else:
+            kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
         filas.append(
             OrdenReferencia(
                 referencia_papa_id=referencia.id,
@@ -277,7 +281,9 @@ def filas_de_mezcla(
                 kg_crudos_por_tanda=kg_crudos,
                 kg_fritos_por_tanda=kg_fritos,
                 kg_crudos_planificados=(kg_crudos * horas).quantize(CENTAVOS),
-                kg_fritos_estimados=(kg_fritos * horas).quantize(CENTAVOS),
+                kg_fritos_estimados=(
+                    (kg_fritos * horas).quantize(CENTAVOS) if kg_fritos is not None else None
+                ),
                 creado_por_id=usuario_id,
             )
         )
@@ -294,7 +300,11 @@ def obtener(db: Session, orden: OrdenProduccion) -> FormulaSalida:
     total_planificados = sum(fila.bultos_planificados for fila in filas)
     total_producidos = sum((fila.bultos_producidos for fila in filas), Decimal("0"))
     total_crudos = sum((fila.kg_crudos_planificados for fila in filas), Decimal("0"))
-    total_fritos = sum((fila.kg_fritos_estimados for fila in filas), Decimal("0"))
+    total_fritos = (
+        None
+        if any(fila.kg_fritos_estimados is None for fila in filas)
+        else sum((fila.kg_fritos_estimados for fila in filas), Decimal("0"))
+    )
     avance = None
     if total_planificados > 0:
         avance = (total_producidos / Decimal(total_planificados) * CIEN).quantize(
@@ -383,8 +393,10 @@ def recalcular_totales(db: Session, orden: OrdenProduccion) -> None:
             fila.kg_crudos_por_tanda * horas
         ).quantize(CENTAVOS)
         fila.kg_fritos_estimados = (
-            fila.kg_fritos_por_tanda * horas
-        ).quantize(CENTAVOS)
+            (fila.kg_fritos_por_tanda * horas).quantize(CENTAVOS)
+            if fila.kg_fritos_por_tanda is not None
+            else None
+        )
 
 
 def validar_cambio_orden(
@@ -415,12 +427,14 @@ def validar_cambio_orden(
             f"La fórmula actual carga {total_por_tanda} bultos por tanda y el nuevo horno "
             f"admite máximo {capacidad}. Bodega debe ajustarla."
         )
-    max_kg_por_bulto = max(
-        kg_fritos_por_bulto(
-            fila.peso_promedio_bulto_kg, fila.rendimiento_fritura_pct
-        )
+    kg_por_bulto = [
+        kg_fritos_por_bulto(fila.peso_promedio_bulto_kg, fila.rendimiento_fritura_pct)
         for fila in orden.referencias
-    )
+        if fila.rendimiento_fritura_pct is not None
+    ]
+    if not kg_por_bulto:
+        return
+    max_kg_por_bulto = max(kg_por_bulto)
     capacidad_kg = Decimal(capacidad * horas_produccion) * max_kg_por_bulto
     if capacidad_kg < cantidad_programada:
         raise ErrorDeValidacion(
@@ -518,14 +532,23 @@ def proyectar(
     filas: list[FormulaProyeccionReferencia] = []
     total_crudos = Decimal("0")
     total_fritos = Decimal("0")
+    falta_rendimiento = False
     for referencia, bultos in mezcla:
         rendimiento = referencia.rendimiento_fritura_pct
-        if rendimiento is None:
-            continue
         kg_crudos = calcular_kg_crudos(bultos, referencia.peso_promedio_bulto_kg)
-        kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
+        if rendimiento is None:
+            # Sin rendimiento no se estiman kg fritos; la mezcla sigue siendo
+            # valida por bultos y peso.
+            falta_rendimiento = True
+            kg_fritos = None
+            kg_fritos_planificados = None
+        else:
+            kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
+            kg_fritos_planificados = (kg_fritos * orden.horas_produccion).quantize(
+                CENTAVOS
+            )
+            total_fritos += kg_fritos_planificados
         total_crudos += (kg_crudos * orden.horas_produccion).quantize(CENTAVOS)
-        total_fritos += (kg_fritos * orden.horas_produccion).quantize(CENTAVOS)
         filas.append(
             FormulaProyeccionReferencia(
                 referencia_id=referencia.id,
@@ -542,12 +565,11 @@ def proyectar(
                 kg_crudos_planificados=(kg_crudos * orden.horas_produccion).quantize(
                     CENTAVOS
                 ),
-                kg_fritos_estimados=(kg_fritos * orden.horas_produccion).quantize(
-                    CENTAVOS
-                ),
+                kg_fritos_estimados=kg_fritos_planificados,
             )
         )
 
+    total_fritos_estimado = None if falta_rendimiento else total_fritos
     kg_promedio = Decimal("0")
     if total_por_tanda > 0:
         kg_promedio = (
@@ -555,46 +577,57 @@ def proyectar(
                 (
                     fila.kg_fritos_por_tanda
                     for fila in filas
+                    if fila.kg_fritos_por_tanda is not None
                 ),
                 Decimal("0"),
             )
             / Decimal(total_por_tanda)
         ).quantize(CUATRO_DECIMALES)
 
-    diferencia = (total_fritos - orden.cantidad_programada).quantize(CENTAVOS)
-    diferencia_pct = Decimal("0")
-    if orden.cantidad_programada > 0:
-        diferencia_pct = (
-            diferencia / orden.cantidad_programada * CIEN
-        ).quantize(CUATRO_DECIMALES)
+    diferencia: Decimal | None = None
+    diferencia_pct: Decimal | None = None
+    if total_fritos_estimado is not None:
+        diferencia = (total_fritos_estimado - orden.cantidad_programada).quantize(CENTAVOS)
+        diferencia_pct = Decimal("0")
+        if orden.cantidad_programada > 0:
+            diferencia_pct = (
+                diferencia / orden.cantidad_programada * CIEN
+            ).quantize(CUATRO_DECIMALES)
 
-    max_kg_por_bulto = max(
-        (
-            kg_fritos_por_bulto(
-                referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct
-            )
-            for referencia, _ in mezcla
-            if referencia.rendimiento_fritura_pct is not None
-        ),
-        default=Decimal("0"),
-    )
-    capacidad_maxima_kg = (
-        Decimal(capacidad * orden.horas_produccion) * max_kg_por_bulto
-    )
-    factible = capacidad_maxima_kg >= orden.cantidad_programada
+    kg_por_bulto = [
+        kg_fritos_por_bulto(
+            referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct
+        )
+        for referencia, _ in mezcla
+        if referencia.rendimiento_fritura_pct is not None
+    ]
+    if kg_por_bulto:
+        capacidad_maxima_kg = (
+            Decimal(capacidad * orden.horas_produccion) * max(kg_por_bulto)
+        )
+        factible = capacidad_maxima_kg >= orden.cantidad_programada
+    else:
+        # Sin rendimiento no hay estimacion de kg: no se puede bloquear por
+        # capacidad fisica, solo por bultos (ya validado arriba).
+        factible = True
     mensaje = None
     if not factible:
         mensaje = (
             "La capacidad máxima del horno no alcanza para la cantidad pedida con el "
             "rendimiento de estas referencias. Ajusta la mezcla o pide más horas."
         )
-    else:
+    elif total_fritos_estimado is not None:
         avisos = _advertencias(
-            total_kg_fritos=total_fritos,
+            total_kg_fritos=total_fritos_estimado,
             cantidad_programada=orden.cantidad_programada,
         )
         if avisos:
             mensaje = " ".join(avisos)
+    else:
+        mensaje = (
+            "Las referencias de la mezcla no tienen rendimiento configurado: "
+            "no se pueden estimar los kg fritos."
+        )
 
     return FormulaProyeccionSalida(
         origen=origen,

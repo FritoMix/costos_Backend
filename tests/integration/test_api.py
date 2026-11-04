@@ -222,6 +222,20 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     assert creada["porcentaje_produccion_pct"] == "33.3300"
     assert creada["fecha_actualizacion"]
     _json(cliente.get(f"{API}/bodega/referencias-papa/{creada['id']}"))
+
+    # Bodega ya no captura tipo, rendimiento ni participación: se pueden
+    # omitir y la referencia queda solo con nombre, peso y estado.
+    minimas = _json(
+        cliente.post(
+            f"{API}/bodega/referencias-papa",
+            json={"nombre": "Papa minima", "peso_promedio_bulto_kg": "47.00"},
+        ),
+        201,
+    )
+    assert minimas["tipo"] is None
+    assert minimas["rendimiento_fritura_pct"] is None
+    assert minimas["porcentaje_produccion_pct"] is None
+    assert cliente.delete(f"{API}/bodega/referencias-papa/{minimas['id']}").status_code == 204
     _json(cliente.get(f"{API}/bodega/referencias-papa?solo_activas=true"))
 
     # Nombre duplicado sin importar mayusculas.
@@ -231,7 +245,6 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     ).status_code == 400
     # Valores fuera de rango: los rechaza el contrato con un mensaje legible.
     for cambio in (
-        {"tipo": "   "},
         {"rendimiento_fritura_pct": "0"},
         {"rendimiento_fritura_pct": "101"},
         {"porcentaje_produccion_pct": "-1"},
@@ -360,28 +373,38 @@ def test_proyeccion_distribuye_capacidad_y_valida_porcentajes(
     assert proyeccion_2h["total_bultos"] == 100
     assert proyeccion_2h["total_kg_crudos"] == "5000.00"
 
-    # Una referencia activa incompleta tampoco se proyecta.
+    # Sin tipo ni rendimiento la referencia sigue proyectando: los kg fritos
+    # quedan sin estimar.
     otra.tipo = None
+    otra.rendimiento_fritura_pct = None
     db.flush()
-    respuesta = cliente.get(
-        f"{API}/bodega/proyeccion",
-        params={"horno_id": datos_base.horno.id},
+    sin_rendimiento = _json(
+        cliente.get(
+            f"{API}/bodega/proyeccion",
+            params={"horno_id": datos_base.horno.id},
+        )
     )
-    assert respuesta.status_code == 400
-    assert "está incompleta" in respuesta.json()["detail"]
-    otra.tipo = "Papa lavada"
+    fila_sin_rendimiento = next(
+        fila for fila in sin_rendimiento["referencias"] if fila["nombre"] == "Papa Proyeccion"
+    )
+    assert fila_sin_rendimiento["rendimiento_fritura_pct"] is None
+    assert fila_sin_rendimiento["kg_fritos_estimados"] is None
+    assert sin_rendimiento["total_kg_fritos_estimados"] is None
+    otra.rendimiento_fritura_pct = Decimal("25.00")
     db.flush()
 
-    # Una configuracion inconsistente se bloquea con mensaje funcional.
+    # Una participacion que no suma 100 % ya no bloquea: se reparte en
+    # partes iguales (Bodega dejo de capturar la participacion).
     datos_base.referencia_papa.porcentaje_produccion_pct = Decimal("50")
     db.flush()
-    respuesta = cliente.get(
-        f"{API}/bodega/proyeccion",
-        params={"horno_id": datos_base.horno.id},
+    iguales = _json(
+        cliente.get(
+            f"{API}/bodega/proyeccion",
+            params={"horno_id": datos_base.horno.id},
+        )
     )
-    assert respuesta.status_code == 400
-    assert "debe sumar 100" in respuesta.json()["detail"]
-    assert "Traceback" not in respuesta.text
+    assert {fila["bultos"] for fila in iguales["referencias"]} == {25}
+    assert "Traceback" not in str(iguales)
 
     # El operario no proyecta.
     operario = TestClient(app)

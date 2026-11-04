@@ -141,14 +141,6 @@ def test_plantilla_rechaza_referencias_invalidas(db, datos_base):
             db, _plantilla(datos_base, (orden_ref, 5)), datos_base.bodeguero
         )
 
-    orden_ref.activo = True
-    orden_ref.tipo = None
-    db.flush()
-    with pytest.raises(ErrorDeValidacion, match="incompleta"):
-        servicio_plantillas.crear(
-            db, _plantilla(datos_base, (orden_ref, 5)), datos_base.bodeguero
-        )
-
 
 def test_no_se_repite_el_nombre_en_el_mismo_producto(db, datos_base):
     servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
