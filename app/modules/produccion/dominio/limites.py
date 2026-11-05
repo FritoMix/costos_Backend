@@ -75,6 +75,51 @@ def validar_horas_de_orden(
             )
 
 
+def validar_conteo_tandas(
+    *,
+    horas_produccion: int | None,
+    registros: Sequence[RegistroConHorario],
+    excluir_id: int | None = None,
+    al_editar_horas: bool = False,
+) -> None:
+    """
+    Una orden de N horas acepta como maximo N tandas.
+
+    Al crear o corregir una tanda se exige que quede al menos un cupo libre
+    (``tandas_activas < horas``). Al editar las horas de la orden se permite
+    que las tandas ya registradas sean exactamente N.
+    """
+    if horas_produccion is None:
+        return
+    activos = [registro for registro in registros if registro.id != excluir_id]
+    if al_editar_horas:
+        if len(activos) > horas_produccion:
+            raise ErrorDeValidacion(
+                f"La orden tiene {horas_produccion} horas y ya registró "
+                f"{len(activos)} tandas. No puedes reducir las horas por debajo de las tandas."
+            )
+        return
+    if len(activos) >= horas_produccion:
+        raise ErrorDeValidacion(
+            f"La orden tiene {horas_produccion} horas y ya registró "
+            f"{len(activos)} tandas. No se puede registrar otra."
+        )
+
+
+def validar_duracion_tanda(
+    *,
+    inicio: datetime,
+    fin: datetime,
+    max_minutos: int = 60,
+) -> None:
+    """Una tanda no puede durar mas de una hora."""
+    if (fin - inicio).total_seconds() > max_minutos * 60:
+        raise ErrorDeValidacion(
+            f"Una tanda de horno no puede durar más de {max_minutos} minutos. "
+            f"Esta tanda dura {_formatear_minutos(_minutos(inicio, fin))}."
+        )
+
+
 def validar_ventana_registro(
     *,
     horas_produccion: int | None,

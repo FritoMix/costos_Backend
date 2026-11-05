@@ -15,9 +15,40 @@ from app.modules.produccion.models import (
     Desperdicio,
     OrdenProduccion,
     RegistroHorno,
+    RegistroHornoReferencia,
     RegistroSaborizado,
 )
 from app.modules.produccion.schemas import TotalesOrden
+
+
+def producido_por_referencia(
+    db: Session,
+    orden_id: int,
+    *,
+    excluir_registro_id: int | None = None,
+) -> dict[int, Decimal]:
+    """
+    Bultos producidos por referencia en una orden.
+
+    Se suma la tabla hija (no la cabecera, que ya guarda el total) y se
+    excluye el registro que se esta corrigiendo para no contar dos veces su
+    version anterior.
+    """
+    consulta = (
+        select(
+            RegistroHornoReferencia.referencia_papa_id,
+            func.coalesce(func.sum(RegistroHornoReferencia.cantidad_bultos), 0),
+        )
+        .join(RegistroHorno, RegistroHornoReferencia.registro_horno_id == RegistroHorno.id)
+        .where(
+            RegistroHorno.orden_id == orden_id,
+            RegistroHorno.eliminado == False,
+        )
+        .group_by(RegistroHornoReferencia.referencia_papa_id)
+    )
+    if excluir_registro_id is not None:
+        consulta = consulta.where(RegistroHorno.id != excluir_registro_id)
+    return {referencia_id: total for referencia_id, total in db.execute(consulta).all()}
 
 
 def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:

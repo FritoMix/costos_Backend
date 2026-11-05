@@ -28,7 +28,10 @@ from app.modules.catalogos.models import Horno, Producto
 from app.modules.catalogos.service import obtener_configuracion
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.notificaciones import service as notificaciones
-from app.modules.produccion.dominio.limites import validar_horas_de_orden
+from app.modules.produccion.dominio.limites import (
+    validar_conteo_tandas,
+    validar_horas_de_orden,
+)
 from app.modules.produccion.models import (
     DestinoOrden,
     EstadoOrden,
@@ -39,6 +42,8 @@ from app.modules.produccion.models import (
     UnidadSolicitada,
 )
 from app.modules.produccion.schemas import OrdenGuardar
+from app.modules.produccion.servicios import formula as servicio_formula
+from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
 from app.modules.produccion.servicios.registros import bloquear_orden
 
 logger = logging.getLogger("datacontrol")
@@ -210,18 +215,31 @@ def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenP
         horas_produccion=datos.horas_produccion,
         destino=datos.destino,
         estado=EstadoOrden.PENDIENTE,
+        # Las ordenes nuevas exigen que Bodega defina la mezcla antes de
+        # producir. Las historicas conservan formula_obligatoria = FALSE.
+        formula_obligatoria=True,
     )
     db.add(orden)
     db.commit()
     db.refresh(orden)
 
-    # Aviso a los operarios de que hay una orden nueva que trabajar. Si algo
-    # falla al notificar, la orden YA quedo creada: se registra el problema
-    # pero no se le devuelve un error al supervisor.
+    # Si el producto tiene una formula activa de Bodega y cabe en el horno
+    # elegido, la orden nace con esa mezcla copiada y se avisa a horno y al
+    # supervisor. Si no hay activa (o no cabe), se pide a Bodega como antes.
+    # La orden YA quedo creada: si algo falla al aplicar o notificar, se
+    # registra el problema pero no se le devuelve un error al supervisor.
     try:
-        notificaciones.avisar_orden_creada(db, orden)
+        aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
+        if aplicada:
+            notificaciones.avisar_formula_lista(db, orden)
+        else:
+            notificaciones.avisar_orden_para_bodega(db, orden)
     except Exception:  # noqa: BLE001
-        logger.exception("No se pudo notificar la creación de la orden %s", orden.numero_orden)
+        logger.exception("No se pudo preparar la fórmula de la orden %s", orden.numero_orden)
+        try:
+            notificaciones.avisar_orden_para_bodega(db, orden)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo avisar a Bodega de la orden %s", orden.numero_orden)
 
     return orden
 
@@ -237,7 +255,7 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
         )
 
     bloquear_orden(db, orden.id)
-    _horno, producto = _validar_catalogos(db, datos)
+    horno, producto = _validar_catalogos(db, datos)
 
     if datos.horas_produccion is not None:
         registros_horno = db.scalars(
@@ -256,6 +274,12 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
             horas_nuevas=datos.horas_produccion,
             registros_horno=registros_horno,
             registros_saborizado=registros_saborizado,
+        )
+        # Una orden de N horas acepta maximo N tandas de horno.
+        validar_conteo_tandas(
+            horas_produccion=datos.horas_produccion,
+            registros=registros_horno,
+            al_editar_horas=True,
         )
 
     if orden.estado == EstadoOrden.EN_PRODUCCION and datos.horno_id != orden.horno_id:
@@ -276,6 +300,17 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
 
     cantidad_kg, canastillas = calcular_cantidad_programada(db, datos, producto)
 
+    # Si la orden ya tiene formula (Pendiente y sin tandas), el cambio de
+    # horas, horno o cantidad debe seguir cabiendo en la capacidad fisica.
+    # Si la formula quedo congelada (En produccion o con tandas), no se toca.
+    servicio_formula.validar_cambio_orden(
+        db,
+        orden,
+        horno=horno,
+        horas_produccion=datos.horas_produccion,
+        cantidad_programada=cantidad_kg,
+    )
+
     orden.turno_id = datos.turno_id
     orden.horno_id = datos.horno_id
     orden.producto_id = datos.producto_id
@@ -294,12 +329,23 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
             "Ese horno acaba de quedar ocupado por otra orden. Intenta de nuevo."
         ) from exc
     db.refresh(orden)
+
+    # Con las horas nuevas, los totales planificados de la formula se
+    # recalculan (la mezcla por tanda no cambia).
+    if orden.referencias and orden.estado == EstadoOrden.PENDIENTE:
+        servicio_formula.recalcular_totales(db, orden)
+        db.commit()
+        db.refresh(orden)
     return orden
 
 
 def iniciar_orden(db: Session, orden: OrdenProduccion) -> OrdenProduccion:
     if orden.estado != EstadoOrden.PENDIENTE:
         raise ErrorDeValidacion("Solo se puede iniciar una orden que esté Pendiente.")
+    if orden.formula_obligatoria and not orden.referencias:
+        raise ErrorDeValidacion(
+            "Bodega debe definir la fórmula antes de iniciar la producción."
+        )
 
     ocupado = db.scalar(
         select(OrdenProduccion).where(
