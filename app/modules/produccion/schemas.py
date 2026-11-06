@@ -61,6 +61,8 @@ class OrdenSalida(BaseModel):
     horas_produccion: int | None
     hora_inicio: datetime | None
     hora_fin: datetime | None
+    formula_estado: str
+    formula_obligatoria: bool
     supervisor: UsuarioRef
     turno: Referencia
     horno: Referencia
@@ -85,6 +87,161 @@ class OrdenGuardar(BaseModel):
     horas_produccion: int | None = Field(default=None, ge=1)
 
 
+# --- Formula de produccion por orden --------------------------------------
+
+
+class FormulaReferenciaGuardar(BaseModel):
+    referencia_papa_id: int = Field(gt=0)
+    bultos_por_tanda: int = Field(gt=0)
+
+
+class FormulaGuardar(BaseModel):
+    referencias: list[FormulaReferenciaGuardar] = Field(min_length=1)
+    notas: str | None = Field(default=None, max_length=500)
+
+
+class FormulaReferenciaSalida(BaseModel):
+    referencia_id: int
+    nombre: str
+    tipo: str | None
+    bultos_por_tanda: int
+    bultos_planificados: int
+    porcentaje_produccion_pct: Decimal
+    peso_promedio_bulto_kg: Decimal
+    # NULL cuando la referencia no tiene rendimiento configurado.
+    rendimiento_fritura_pct: Decimal | None
+    kg_crudos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal | None
+    kg_crudos_planificados: Decimal
+    kg_fritos_estimados: Decimal | None
+    bultos_producidos: Decimal
+    bultos_restantes: Decimal
+
+
+class FormulaSalida(BaseModel):
+    orden_id: int
+    estado: str
+    referencias: list[FormulaReferenciaSalida]
+    notas: str | None
+    capacidad_bultos_hora: Decimal | None
+    capacidad_maxima_bultos: int | None
+    total_bultos_por_tanda: int
+    total_bultos_planificados: int
+    total_kg_crudos: Decimal
+    total_kg_fritos_estimados: Decimal | None
+    total_bultos_producidos: Decimal
+    avance_bultos_porcentaje: Decimal | None
+    tandas_registradas: int
+    tandas_programadas: int | None
+    actualizada_por: UsuarioRef | None
+    fecha_actualizacion: datetime | None
+    advertencias: list[str] = []
+
+
+class FormulaProyeccionGuardar(BaseModel):
+    referencias: list[FormulaReferenciaGuardar] = Field(default_factory=list)
+    usar_sugerencia: bool = False
+
+
+class FormulaProyeccionReferencia(BaseModel):
+    referencia_id: int
+    nombre: str
+    tipo: str | None
+    bultos_por_tanda: int
+    porcentaje_produccion_pct: Decimal
+    peso_promedio_bulto_kg: Decimal
+    rendimiento_fritura_pct: Decimal | None
+    kg_crudos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal | None
+    kg_crudos_planificados: Decimal
+    kg_fritos_estimados: Decimal | None
+
+
+class FormulaProyeccionSalida(BaseModel):
+    origen: str
+    capacidad_bultos_hora: Decimal | None
+    capacidad_maxima_bultos: int | None
+    total_bultos_por_tanda: int
+    total_bultos_planificados: int
+    kg_fritos_por_bulto_promedio: Decimal
+    total_kg_crudos: Decimal
+    total_kg_fritos_estimados: Decimal | None
+    cantidad_programada: Decimal
+    diferencia_kg: Decimal | None
+    diferencia_pct: Decimal | None
+    tandas_programadas: int
+    factible: bool
+    mensaje: str | None
+    referencias: list[FormulaProyeccionReferencia]
+
+
+class FormulaPapaReferenciaGuardar(BaseModel):
+    referencia_papa_id: int = Field(gt=0)
+    bultos_por_tanda: int = Field(gt=0)
+
+
+class FormulaPapaGuardar(BaseModel):
+    nombre: str = Field(min_length=1, max_length=150)
+    producto_id: int = Field(gt=0)
+    referencias: list[FormulaPapaReferenciaGuardar] = Field(min_length=1)
+    notas: str | None = Field(default=None, max_length=500)
+
+
+class FormulaPapaReferenciaSalida(BaseModel):
+    referencia_id: int
+    nombre: str
+    tipo: str | None
+    bultos_por_tanda: int
+    porcentaje_produccion_pct: Decimal
+    peso_promedio_bulto_kg: Decimal
+    rendimiento_fritura_pct: Decimal | None
+    kg_crudos_por_tanda: Decimal
+    kg_fritos_por_tanda: Decimal | None
+
+
+class FormulaPapaSalida(BaseModel):
+    id: int
+    nombre: str
+    producto: ProductoRef
+    activa: bool
+    notas: str | None
+    referencias: list[FormulaPapaReferenciaSalida]
+    total_bultos_por_tanda: int
+    total_kg_crudos: Decimal
+    total_kg_fritos_estimados: Decimal | None
+    horas: int | None = None
+    total_bultos_planificados: int | None = None
+    total_kg_crudos_planificados: Decimal | None = None
+    total_kg_fritos_planificados: Decimal | None = None
+    creado_por: UsuarioRef | None
+    fecha_creacion: datetime
+    fecha_actualizacion: datetime
+
+
+class FormulaPapaSugerenciaReferencia(BaseModel):
+    referencia_papa_id: int
+    bultos_por_tanda: int
+
+
+class FormulaPapaSugerenciaSalida(BaseModel):
+    capacidad_bultos_hora: int
+    referencias: list[FormulaPapaSugerenciaReferencia]
+
+
+class OrdenBodegaSalida(OrdenSalida):
+    formula_notas: str | None
+    total_bultos_planificados: int | None
+    total_bultos_producidos: Decimal | None
+    tandas_registradas: int
+    tandas_programadas: int | None
+    avance_bultos_porcentaje: Decimal | None
+
+
+class OrdenBodegaDetalle(BaseModel):
+    orden: OrdenBodegaSalida
+    formula: FormulaSalida
+
+
 # --- Registro de horno -----------------------------------------------------
 
 
@@ -98,6 +255,19 @@ class DesperdicioSalida(BaseModel):
     tipo_desperdicio: Referencia
 
 
+class RegistroReferenciaSalida(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    referencia_papa_id: int
+    nombre: str
+    cantidad_bultos: Decimal
+    peso_estandar_bulto_kg: Decimal
+    rendimiento_fritura_pct: Decimal | None
+    porcentaje_produccion_pct: Decimal | None
+    kg_crudos_calculados: Decimal
+    kg_fritos_estimados: Decimal | None
+
+
 class RegistroHornoSalida(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -106,8 +276,9 @@ class RegistroHornoSalida(BaseModel):
     hora_inicio: datetime
     hora_fin: datetime
     referencia_papa: ReferenciaPapaRef | None
+    referencias: list[RegistroReferenciaSalida] = []
     cantidad_bultos: Decimal
-    peso_estandar_bulto_kg: Decimal
+    peso_estandar_bulto_kg: Decimal | None
     rendimiento_fritura_pct: Decimal | None
     porcentaje_produccion_pct: Decimal | None
     kg_crudos_calculados: Decimal
@@ -128,13 +299,21 @@ class RegistroHornoSalida(BaseModel):
     desperdicios: list[DesperdicioSalida]
 
 
+class RegistroReferenciaGuardar(BaseModel):
+    referencia_papa_id: int = Field(gt=0)
+    cantidad_bultos: Decimal = Field(gt=0)
+
+
 class RegistroHornoGuardar(BaseModel):
     # Solo la hora del reloj: la fecha la pone la app (es la de la orden) y
     # el usuario sale del token. Al operario no se le pide ni una ni otro.
     hora_inicio: time
     hora_fin: time
-    referencia_papa_id: int = Field(gt=0)
-    cantidad_bultos: Decimal = Field(gt=0)
+    # Formato nuevo: una o varias referencias por tanda.
+    referencias: list[RegistroReferenciaGuardar] | None = None
+    # Compatibilidad: clientes viejos envían una sola referencia.
+    referencia_papa_id: int | None = Field(default=None, gt=0)
+    cantidad_bultos: Decimal | None = Field(default=None, gt=0)
     operarios_seleccion: int = Field(ge=0, le=999)
     operarios_horno: int = Field(ge=0, le=999)
     nivel_aceite_inicial_cm: Decimal = Field(ge=0)
@@ -151,6 +330,19 @@ class RegistroHornoGuardar(BaseModel):
         """Primera barrera: el consumo de aceite no puede ser negativo."""
         if self.nivel_aceite_final_cm > self.nivel_aceite_inicial_cm:
             raise ValueError("El nivel final del aceite no puede ser mayor que el inicial.")
+        return self
+
+    @model_validator(mode="after")
+    def _exigir_mezcla(self) -> "RegistroHornoGuardar":
+        """Una tanda necesita el formato nuevo o los dos campos heredados."""
+        if not self.referencias and (
+            self.referencia_papa_id is None or self.cantidad_bultos is None
+        ):
+            raise ValueError("Debes indicar al menos una referencia para la tanda.")
+        if self.referencias:
+            ids = [fila.referencia_papa_id for fila in self.referencias]
+            if len(ids) != len(set(ids)):
+                raise ValueError("No puedes repetir una referencia en la misma tanda.")
         return self
 
 
@@ -206,5 +398,6 @@ class TotalesOrden(BaseModel):
 class OrdenDetalle(BaseModel):
     orden: OrdenSalida
     totales: TotalesOrden
+    formula: FormulaSalida | None
     registros_horno: list[RegistroHornoSalida]
     recepciones: list[RecepcionSalida]

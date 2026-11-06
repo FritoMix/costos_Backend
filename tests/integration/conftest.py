@@ -25,7 +25,12 @@ from app.modules.catalogos.models import (
 )
 from app.modules.identidad.models import Rol, RolCodigo, Usuario
 from app.modules.produccion.models import DestinoOrden, UnidadSolicitada
-from app.modules.produccion.schemas import OrdenGuardar
+from app.modules.produccion.schemas import (
+    FormulaGuardar,
+    FormulaReferenciaGuardar,
+    OrdenGuardar,
+)
+from app.modules.produccion.servicios import formula as servicio_formula
 
 HASH_DE_PRUEBA = "hash-de-prueba-sin-uso-en-login"
 
@@ -141,3 +146,36 @@ def orden_guardar(datos_base: SimpleNamespace):
         return OrdenGuardar(**base)
 
     return _crear
+
+
+@pytest.fixture
+def guardar_formula(db: Session, datos_base: SimpleNamespace):
+    """
+    Guarda la fórmula de una orden como Bodega.
+
+    La misma mezcla (10 bultos de la referencia de prueba) se repite en cada
+    tanda. Con 2 horas, planifica 20 bultos: el histórico de 10 bultos por
+    tanda sigue siendo válido y la capacidad del horno (50) no se supera.
+    """
+
+    def _guardar(
+        orden,
+        *,
+        bultos_por_tanda: int = 10,
+        referencia_papa_id: int | None = None,
+        notas: str | None = None,
+    ):
+        datos = FormulaGuardar(
+            referencias=[
+                FormulaReferenciaGuardar(
+                    referencia_papa_id=(
+                        referencia_papa_id or datos_base.referencia_papa.id
+                    ),
+                    bultos_por_tanda=bultos_por_tanda,
+                )
+            ],
+            notas=notas,
+        )
+        return servicio_formula.guardar(db, orden, datos, datos_base.bodeguero)
+
+    return _guardar

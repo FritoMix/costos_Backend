@@ -222,6 +222,20 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     assert creada["porcentaje_produccion_pct"] == "33.3300"
     assert creada["fecha_actualizacion"]
     _json(cliente.get(f"{API}/bodega/referencias-papa/{creada['id']}"))
+
+    # Bodega ya no captura tipo, rendimiento ni participación: se pueden
+    # omitir y la referencia queda solo con nombre, peso y estado.
+    minimas = _json(
+        cliente.post(
+            f"{API}/bodega/referencias-papa",
+            json={"nombre": "Papa minima", "peso_promedio_bulto_kg": "47.00"},
+        ),
+        201,
+    )
+    assert minimas["tipo"] is None
+    assert minimas["rendimiento_fritura_pct"] is None
+    assert minimas["porcentaje_produccion_pct"] is None
+    assert cliente.delete(f"{API}/bodega/referencias-papa/{minimas['id']}").status_code == 204
     _json(cliente.get(f"{API}/bodega/referencias-papa?solo_activas=true"))
 
     # Nombre duplicado sin importar mayusculas.
@@ -231,7 +245,6 @@ def test_bodega_referencias_crud_y_permisos(cliente: TestClient, datos_base):
     ).status_code == 400
     # Valores fuera de rango: los rechaza el contrato con un mensaje legible.
     for cambio in (
-        {"tipo": "   "},
         {"rendimiento_fritura_pct": "0"},
         {"rendimiento_fritura_pct": "101"},
         {"porcentaje_produccion_pct": "-1"},
@@ -360,28 +373,38 @@ def test_proyeccion_distribuye_capacidad_y_valida_porcentajes(
     assert proyeccion_2h["total_bultos"] == 100
     assert proyeccion_2h["total_kg_crudos"] == "5000.00"
 
-    # Una referencia activa incompleta tampoco se proyecta.
+    # Sin tipo ni rendimiento la referencia sigue proyectando: los kg fritos
+    # quedan sin estimar.
     otra.tipo = None
+    otra.rendimiento_fritura_pct = None
     db.flush()
-    respuesta = cliente.get(
-        f"{API}/bodega/proyeccion",
-        params={"horno_id": datos_base.horno.id},
+    sin_rendimiento = _json(
+        cliente.get(
+            f"{API}/bodega/proyeccion",
+            params={"horno_id": datos_base.horno.id},
+        )
     )
-    assert respuesta.status_code == 400
-    assert "está incompleta" in respuesta.json()["detail"]
-    otra.tipo = "Papa lavada"
+    fila_sin_rendimiento = next(
+        fila for fila in sin_rendimiento["referencias"] if fila["nombre"] == "Papa Proyeccion"
+    )
+    assert fila_sin_rendimiento["rendimiento_fritura_pct"] is None
+    assert fila_sin_rendimiento["kg_fritos_estimados"] is None
+    assert sin_rendimiento["total_kg_fritos_estimados"] is None
+    otra.rendimiento_fritura_pct = Decimal("25.00")
     db.flush()
 
-    # Una configuracion inconsistente se bloquea con mensaje funcional.
+    # Una participacion que no suma 100 % ya no bloquea: se reparte en
+    # partes iguales (Bodega dejo de capturar la participacion).
     datos_base.referencia_papa.porcentaje_produccion_pct = Decimal("50")
     db.flush()
-    respuesta = cliente.get(
-        f"{API}/bodega/proyeccion",
-        params={"horno_id": datos_base.horno.id},
+    iguales = _json(
+        cliente.get(
+            f"{API}/bodega/proyeccion",
+            params={"horno_id": datos_base.horno.id},
+        )
     )
-    assert respuesta.status_code == 400
-    assert "debe sumar 100" in respuesta.json()["detail"]
-    assert "Traceback" not in respuesta.text
+    assert {fila["bultos"] for fila in iguales["referencias"]} == {25}
+    assert "Traceback" not in str(iguales)
 
     # El operario no proyecta.
     operario = TestClient(app)
@@ -553,6 +576,21 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
             },
         )
     )
+    # Bodega define la mezcla de 2 horas antes de que la orden pueda iniciar.
+    _json(
+        cliente.put(
+            f"{API}/ordenes/{orden_id}/formula",
+            json={
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 10,
+                    }
+                ],
+                "notas": "Mezcla de prueba",
+            },
+        )
+    )
     _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
     _json(cliente.get(f"{API}/ordenes"))
     _json(cliente.get(f"{API}/ordenes?estado=en_produccion"))
@@ -583,7 +621,7 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
             f"{API}/ordenes/{orden_id}/registros-horno/{registro['id']}",
             json={
                 "hora_inicio": "06:00:00",
-                "hora_fin": "07:30:00",
+                "hora_fin": "07:00:00",
                 "referencia_papa_id": datos_base.referencia_papa.id,
                 "cantidad_bultos": "11",
                 "operarios_seleccion": 2,
@@ -676,6 +714,21 @@ def test_los_registros_no_superan_las_horas_de_la_orden(cliente: TestClient, dat
         201,
     )
     orden_id = orden["id"]
+    # Fórmula holgada: la segunda tanda que se intenta después debe fallar por
+    # tiempo, no por bultos restantes.
+    _json(
+        cliente.put(
+            f"{API}/ordenes/{orden_id}/formula",
+            json={
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 20,
+                    }
+                ]
+            },
+        )
+    )
     _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
 
     datos_horno = {
@@ -779,3 +832,176 @@ def test_el_limite_por_ruta_de_exportacion_responde_429(cliente: TestClient):
     respuesta = cliente.get(f"{API}/analitica/exportar.csv")
     assert respuesta.status_code == 429
     assert "Demasiadas peticiones" in respuesta.json()["detail"]
+
+
+def test_formula_y_bandeja_respetan_los_permisos_de_bodega(
+    cliente: TestClient, datos_base, db: Session
+):
+    _login(cliente)
+    orden = _json(
+        cliente.post(
+            f"{API}/ordenes",
+            json={
+                "turno_id": datos_base.turno.id,
+                "horno_id": datos_base.horno.id,
+                "categoria_id": datos_base.categoria.id,
+                "producto_id": datos_base.producto.id,
+                "destino": "nacional",
+                "unidad_solicitada": "kg",
+                "cantidad_kg": "100.00",
+                "horas_produccion": 2,
+            },
+        ),
+        201,
+    )
+    orden_id = orden["id"]
+
+    # Sin fórmula, la lectura de producción devuelve el estado pendiente.
+    detalle = _json(cliente.get(f"{API}/ordenes/{orden_id}"))
+    assert detalle["formula"]["estado"] == "sin_formula"
+
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+
+    # Bodega ve su bandeja y define la fórmula, pero no entra a producción.
+    pendientes = _json(bodeguero.get(f"{API}/bodega/ordenes?solo_sin_formula=true"))
+    assert [fila["id"] for fila in pendientes] == [orden_id]
+
+    formula = _json(
+        bodeguero.put(
+            f"{API}/ordenes/{orden_id}/formula",
+            json={
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 10,
+                    }
+                ]
+            },
+        )
+    )
+    assert formula["estado"] == "lista"
+    assert formula["total_bultos_planificados"] == 20
+
+    detalle_bodega = _json(bodeguero.get(f"{API}/bodega/ordenes/{orden_id}"))
+    assert detalle_bodega["orden"]["formula_estado"] == "lista"
+    assert detalle_bodega["formula"]["total_bultos_por_tanda"] == 10
+
+    assert bodeguero.get(f"{API}/ordenes/{orden_id}").status_code == 403
+    assert bodeguero.get(f"{API}/ordenes/{orden_id}/formula").status_code == 403
+    assert bodeguero.get(f"{API}/ordenes/{orden_id}/registros-horno").status_code == 403
+    bodeguero.close()
+
+    # Los roles de producción sí leen la fórmula.
+    operario = TestClient(app)
+    _login(operario, "operario_horno_prueba")
+    leida = _json(operario.get(f"{API}/ordenes/{orden_id}/formula"))
+    assert leida["estado"] == "lista"
+    assert operario.put(
+        f"{API}/ordenes/{orden_id}/formula",
+        json={
+            "referencias": [
+                {
+                    "referencia_papa_id": datos_base.referencia_papa.id,
+                    "bultos_por_tanda": 5,
+                }
+            ]
+        },
+    ).status_code == 403
+    operario.close()
+
+    _json(cliente.post(f"{API}/ordenes/{orden_id}/iniciar"))
+
+    # Con la producción iniciada la fórmula queda congelada.
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+    congelada = bodeguero.put(
+        f"{API}/ordenes/{orden_id}/formula",
+        json={
+            "referencias": [
+                {
+                    "referencia_papa_id": datos_base.referencia_papa.id,
+                    "bultos_por_tanda": 5,
+                }
+            ]
+        },
+    )
+    assert congelada.status_code == 400
+    assert "Pendiente" in congelada.json()["detail"]
+    bodeguero.close()
+
+
+def test_formulas_papa_respetan_los_permisos(
+    cliente: TestClient, datos_base, db: Session
+):
+    bodeguero = TestClient(app)
+    _login(bodeguero, "bodeguero_prueba")
+
+    # Bodega crea y activa; la lista sale con la activa marcada.
+    creada = _json(
+        bodeguero.post(
+            f"{API}/bodega/formulas-papa",
+            json={
+                "nombre": "Fórmula API",
+                "producto_id": datos_base.producto.id,
+                "referencias": [
+                    {
+                        "referencia_papa_id": datos_base.referencia_papa.id,
+                        "bultos_por_tanda": 10,
+                    }
+                ],
+                "notas": None,
+            },
+        ),
+        201,
+    )
+    assert creada["activa"] is False
+    _json(bodeguero.post(f"{API}/bodega/formulas-papa/{creada['id']}/activar"))
+    activas = _json(bodeguero.get(f"{API}/bodega/formulas-papa?solo_activas=true"))
+    assert [formula["id"] for formula in activas] == [creada["id"]]
+    _json(bodeguero.get(f"{API}/bodega/formulas-papa/{creada['id']}"))
+    # Reparte la capacidad del horno entre las referencias elegidas.
+    sugerencia = _json(
+        bodeguero.post(
+            f"{API}/bodega/formulas-papa/sugerir",
+            params={"referencia_ids": [datos_base.referencia_papa.id]},
+        )
+    )
+    assert sugerencia["capacidad_bultos_hora"] == 50
+    assert sugerencia["referencias"] == [
+        {"referencia_papa_id": datos_base.referencia_papa.id, "bultos_por_tanda": 50}
+    ]
+    bodeguero.close()
+
+    # El supervisor lee la activa del producto (la necesita al crear la orden)
+    # pero no puede escribir fórmulas.
+    supervisor = TestClient(app)
+    _login(supervisor, "supervisor_prueba")
+    activa = _json(
+        supervisor.get(
+            f"{API}/bodega/formulas-papa/activa",
+            params={"producto_id": datos_base.producto.id, "horas": 2},
+        )
+    )
+    assert activa["id"] == creada["id"]
+    assert activa["total_bultos_planificados"] == 20
+    assert supervisor.post(
+        f"{API}/bodega/formulas-papa",
+        json={
+            "nombre": "No permitida",
+            "producto_id": datos_base.producto.id,
+            "referencias": [
+                {
+                    "referencia_papa_id": datos_base.referencia_papa.id,
+                    "bultos_por_tanda": 5,
+                }
+            ],
+        },
+    ).status_code == 403
+    supervisor.close()
+
+    # Los operarios no ven el catálogo de Bodega.
+    operario = TestClient(app)
+    _login(operario, "operario_horno_prueba")
+    assert operario.get(f"{API}/bodega/formulas-papa").status_code == 403
+    operario.close()

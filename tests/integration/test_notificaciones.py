@@ -21,17 +21,29 @@ def _contar(db, orden_id: int, tipo: str) -> int:
     ) or 0
 
 
-def test_avisar_dos_veces_no_duplica_ni_pierde(db, datos_base, orden_guardar):
+def test_avisar_dos_veces_no_duplica_ni_pierde(
+    db, datos_base, orden_guardar, guardar_formula
+):
     orden = servicio_ordenes.crear_orden(
         db, orden_guardar(), datos_base.supervisor
     )
 
-    # Un aviso por cada operario activo (horno y saborizado).
-    assert _contar(db, orden.id, TipoNotificacion.ORDEN_CREADA) == 2
+    # La orden nueva avisa a Bodega, no a los operarios: todavía no se puede
+    # producir hasta que exista la fórmula.
+    assert _contar(db, orden.id, TipoNotificacion.ORDEN_PARA_BODEGA) == 1
+    assert _contar(db, orden.id, TipoNotificacion.ORDEN_CREADA) == 0
 
-    servicio_notificaciones.avisar_orden_creada(db, orden)
+    servicio_notificaciones.avisar_orden_para_bodega(db, orden)
 
-    assert _contar(db, orden.id, TipoNotificacion.ORDEN_CREADA) == 2
+    assert _contar(db, orden.id, TipoNotificacion.ORDEN_PARA_BODEGA) == 1
+
+    # Al guardar la fórmula se avisa a horno y al supervisor. Corregirla
+    # actualiza el aviso existente en vez de duplicarlo.
+    guardar_formula(orden)
+    assert _contar(db, orden.id, TipoNotificacion.FORMULA_LISTA) == 2
+
+    guardar_formula(orden)
+    assert _contar(db, orden.id, TipoNotificacion.FORMULA_LISTA) == 2
 
     servicio_ordenes.iniciar_orden(db, orden)
 

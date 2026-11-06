@@ -17,8 +17,12 @@ from app.db.base import Base
 class TipoNotificacion:
     """Motivos por los que la app avisa. Deben coincidir con el CHECK de la tabla."""
 
+    # Historico: lo generaban las ordenes antes de la formula por orden.
     ORDEN_CREADA = "orden_creada"
     PRODUCCION_POR_TERMINAR = "produccion_por_terminar"
+    # Flujo nuevo: la orden nace pendiente de formula y Bodega la define.
+    ORDEN_PARA_BODEGA = "orden_para_bodega"
+    FORMULA_LISTA = "formula_lista"
 
 
 class Notificacion(Base):
