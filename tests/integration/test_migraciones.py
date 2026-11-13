@@ -40,11 +40,7 @@ TABLAS_ESPERADAS = {
 
 def test_esquema_y_datos_iniciales(engine_integracion):
     with engine_integracion.connect() as conexion:
-        tablas = set(
-            conexion.scalars(
-                text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-            )
-        )
+        tablas = set(conexion.scalars(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")))
         roles = set(conexion.scalars(text("SELECT codigo FROM roles")))
         hornos = set(conexion.scalars(text("SELECT nombre FROM hornos")))
 
@@ -125,10 +121,7 @@ def test_rendimiento_y_kg_fritos_opcionales_en_la_formula(engine_integracion):
 def test_una_sola_formula_activa_por_producto(engine_integracion):
     with engine_integracion.connect() as conexion:
         definicion = conexion.scalar(
-            text(
-                "SELECT indexdef FROM pg_indexes "
-                "WHERE indexname = 'ux_formula_papa_activa_por_producto'"
-            )
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ux_formula_papa_activa_por_producto'")
         )
         columna = conexion.scalar(
             text(
@@ -142,3 +135,26 @@ def test_una_sola_formula_activa_por_producto(engine_integracion):
     assert "UNIQUE" in definicion
     assert "WHERE activa" in definicion
     assert columna == "formula_papa_id"
+
+
+def test_arranques_concurrentes_aplican_una_migracion_una_sola_vez(engine_integracion, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    (tmp_path / "V99__prueba_concurrencia.sql").write_text(
+        "CREATE TABLE prueba_migracion_concurrente (id INTEGER)", encoding="utf-8"
+    )
+    barrera = Barrier(2)
+
+    def migrar():
+        barrera.wait()
+        return aplicar_migraciones_pendientes(engine_integracion, tmp_path)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as ejecutor:
+            futuros = [ejecutor.submit(migrar) for _ in range(2)]
+            assert sorted(f.result() for f in futuros) == [0, 1]
+    finally:
+        with engine_integracion.begin() as conexion:
+            conexion.execute(text("DROP TABLE IF EXISTS prueba_migracion_concurrente"))
+            conexion.execute(text("DELETE FROM esquema_migraciones WHERE version = 99"))

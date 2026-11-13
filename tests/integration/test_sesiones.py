@@ -12,10 +12,11 @@ import pytest
 
 from app.core.config import settings
 from app.core.errores import CredencialesInvalidas
-from app.core.seguridad import crear_token_acceso, hash_password
+from app.core.seguridad import hash_password
 from app.modules.identidad import service
 from app.modules.identidad.dependencias import usuario_actual
 from app.modules.identidad.schemas import UsuarioActualizar
+from app.modules.identidad.sesiones import emitir_sesion
 
 
 def _peticion_con(token: str) -> SimpleNamespace:
@@ -28,9 +29,7 @@ def test_cambiar_password_revoca_los_tokens_anteriores(db, datos_base):
     usuario.password_hash = hash_password("clave-actual")
     db.flush()
 
-    token_viejo, _ = crear_token_acceso(
-        usuario.id, usuario.rol.codigo, usuario.token_version
-    )
+    token_viejo, _ = emitir_sesion(db, usuario)
 
     service.cambiar_password_propia(db, usuario, "clave-actual", "clave-nueva")
 
@@ -38,17 +37,13 @@ def test_cambiar_password_revoca_los_tokens_anteriores(db, datos_base):
     with pytest.raises(CredencialesInvalidas):
         usuario_actual(_peticion_con(token_viejo), db)
 
-    token_nuevo, _ = crear_token_acceso(
-        usuario.id, usuario.rol.codigo, usuario.token_version
-    )
+    token_nuevo, _ = emitir_sesion(db, usuario)
     assert usuario_actual(_peticion_con(token_nuevo), db).id == usuario.id
 
 
 def test_desactivar_y_reactivar_la_cuenta_no_resucita_la_sesion_vieja(db, datos_base):
     usuario = datos_base.admin
-    token_viejo, _ = crear_token_acceso(
-        usuario.id, usuario.rol.codigo, usuario.token_version
-    )
+    token_viejo, _ = emitir_sesion(db, usuario)
 
     def actualizar(activo: bool) -> None:
         service.actualizar_usuario(

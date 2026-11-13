@@ -81,3 +81,21 @@ class Usuario(Base):
 
     def __repr__(self) -> str:
         return f"<Usuario {self.nombre_usuario}>"
+
+
+class SesionUsuario(Base):
+    __tablename__ = "sesiones_usuario"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ultima_actividad: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class IntentoLogin(Base):
+    __tablename__ = "intentos_login"
+
+    clave: Mapped[str] = mapped_column(String(64), primary_key=True)
+    fallos: Mapped[int] = mapped_column(default=0)
+    ultimo_intento: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    bloqueado_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

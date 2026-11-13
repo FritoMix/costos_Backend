@@ -19,6 +19,7 @@ from app.core.errores import (
 from app.core.seguridad import hash_password, verificar_password
 from app.modules.identidad.models import Rol, Usuario
 from app.modules.identidad.schemas import UsuarioActualizar, UsuarioCrear
+from app.modules.identidad.sesiones import revocar_sesiones_usuario
 
 # --- Consultas basicas -----------------------------------------------------
 
@@ -82,6 +83,7 @@ def cambiar_password_propia(db: Session, usuario: Usuario, actual: str, nueva: s
     # Invalida cualquier token emitido antes de este cambio. El router
     # reemite uno nuevo para que la sesion actual siga funcionando.
     usuario.token_version += 1
+    revocar_sesiones_usuario(db, usuario.id)
     db.commit()
 
 
@@ -138,6 +140,7 @@ def actualizar_usuario(db: Session, usuario_id: int, datos: UsuarioActualizar) -
         # Cualquier cambio de credenciales o una desactivacion cierra las
         # sesiones abiertas de ese usuario.
         usuario.token_version += 1
+        revocar_sesiones_usuario(db, usuario.id)
 
     db.commit()
     db.refresh(usuario)
@@ -155,5 +158,6 @@ def eliminar_usuario(db: Session, usuario_id: int, eliminado_por: Usuario) -> No
 
     usuario.activo = False
     usuario.token_version += 1
+    revocar_sesiones_usuario(db, usuario.id)
     marcar_eliminado_por(db, usuario, eliminado_por)
     db.commit()
