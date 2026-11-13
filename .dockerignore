@@ -3,3 +3,11 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+
+.git/
+.env
+.env.*
+backups/
+**/*.dump
+**/*.age
+**/*.identity
