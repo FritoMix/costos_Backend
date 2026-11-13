@@ -17,10 +17,11 @@ supervisor y operarios. Bodega no consulta ordenes ni sus registros.
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.errores import PermisoDenegado
+from app.core.errores import PermisoDenegado, RecursoNoEncontrado
+from app.db.idempotencia import ejecutar as ejecutar_idempotente
 from app.db.session import get_db
 from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
@@ -95,9 +96,7 @@ BodegaFormula = Annotated[
 # supervisor necesita ver la activa al crear la orden.
 VeFormulasPapa = Annotated[
     Usuario,
-    Depends(
-        requiere_roles(RolCodigo.ADMIN, RolCodigo.SUPERVISOR, RolCodigo.BODEGUERO)
-    ),
+    Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.SUPERVISOR, RolCodigo.BODEGUERO)),
 ]
 # Crear, editar, activar y eliminar formulas reutilizables: solo Bodega.
 GestionaFormulasPapa = Annotated[
@@ -106,12 +105,8 @@ GestionaFormulasPapa = Annotated[
 ]
 
 router = APIRouter(prefix="/ordenes", tags=["Órdenes de producción"])
-router_bodega_ordenes = APIRouter(
-    prefix="/bodega/ordenes", tags=["Bodega · Fórmula de producción"]
-)
-router_bodega_formulas = APIRouter(
-    prefix="/bodega/formulas-papa", tags=["Bodega · Fórmulas por producto"]
-)
+router_bodega_ordenes = APIRouter(prefix="/bodega/ordenes", tags=["Bodega · Fórmula de producción"])
+router_bodega_formulas = APIRouter(prefix="/bodega/formulas-papa", tags=["Bodega · Fórmulas por producto"])
 
 
 @router_bodega_formulas.get("", response_model=list[FormulaPapaSalida])
@@ -122,9 +117,7 @@ def listar_formulas_papa(
     solo_activas: Annotated[bool, Query()] = False,
 ):
     """Catálogo de fórmulas reutilizables, con su estado de activación."""
-    return servicio_formulas_papa.listar(
-        db, producto_id=producto_id, solo_activas=solo_activas
-    )
+    return servicio_formulas_papa.listar(db, producto_id=producto_id, solo_activas=solo_activas)
 
 
 @router_bodega_formulas.get("/activa", response_model=FormulaPapaSalida | None)
@@ -135,9 +128,7 @@ def formula_activa_del_producto(
     horas: Annotated[int | None, Query(ge=1, le=24)] = None,
 ):
     """Fórmula activa del producto (la que verá el supervisor al crear la orden)."""
-    return servicio_formulas_papa.activa_para_orden(
-        db, producto_id=producto_id, horas=horas
-    )
+    return servicio_formulas_papa.activa_para_orden(db, producto_id=producto_id, horas=horas)
 
 
 @router_bodega_formulas.post("/sugerir", response_model=FormulaPapaSugerenciaSalida)
@@ -169,9 +160,7 @@ def crear_formula_papa(datos: FormulaPapaGuardar, db: BD, usuario: GestionaFormu
 
 
 @router_bodega_formulas.put("/{formula_id}", response_model=FormulaPapaSalida)
-def actualizar_formula_papa(
-    formula_id: int, datos: FormulaPapaGuardar, db: BD, _: GestionaFormulasPapa
-):
+def actualizar_formula_papa(formula_id: int, datos: FormulaPapaGuardar, db: BD, _: GestionaFormulasPapa):
     formula = servicio_formulas_papa.obtener(db, formula_id)
     return servicio_formulas_papa.actualizar(db, formula, datos)
 
@@ -179,16 +168,12 @@ def actualizar_formula_papa(
 @router_bodega_formulas.post("/{formula_id}/activar", response_model=FormulaPapaSalida)
 def activar_formula_papa(formula_id: int, db: BD, _: GestionaFormulasPapa):
     """Activa esta fórmula y desactiva la que estuviera activa del producto."""
-    return servicio_formulas_papa.activar(
-        db, servicio_formulas_papa.obtener(db, formula_id)
-    )
+    return servicio_formulas_papa.activar(db, servicio_formulas_papa.obtener(db, formula_id))
 
 
 @router_bodega_formulas.post("/{formula_id}/desactivar", response_model=FormulaPapaSalida)
 def desactivar_formula_papa(formula_id: int, db: BD, _: GestionaFormulasPapa):
-    return servicio_formulas_papa.desactivar(
-        db, servicio_formulas_papa.obtener(db, formula_id)
-    )
+    return servicio_formulas_papa.desactivar(db, servicio_formulas_papa.obtener(db, formula_id))
 
 
 @router_bodega_formulas.delete("/{formula_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -262,14 +247,25 @@ def listar(
     estado: str | None = None,
     solo_propias: bool | None = None,
 ):
-    return servicio_ordenes.listar_ordenes(
-        db, usuario=usuario, estado=estado, solo_propias=solo_propias
-    )
+    return servicio_ordenes.listar_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
 
 
 @router.post("", response_model=OrdenSalida, status_code=status.HTTP_201_CREATED)
-def crear(datos: OrdenGuardar, db: BD, usuario: Supervisa):
-    return servicio_ordenes.crear_orden(db, datos, usuario)
+def crear(
+    datos: OrdenGuardar,
+    db: BD,
+    usuario: Supervisa,
+    idempotency_key: Annotated[str | None, Header(min_length=16, max_length=128)] = None,
+):
+    return ejecutar_idempotente(
+        db,
+        usuario.id,
+        "crear_orden",
+        idempotency_key,
+        datos,
+        lambda: servicio_ordenes.crear_orden(db, datos, usuario),
+        OrdenSalida,
+    )
 
 
 @router.get("/{orden_id}", response_model=OrdenDetalle)
@@ -283,8 +279,7 @@ def detalle(orden_id: int, db: BD, _: VeOrdenes):
             RegistroHornoSalida.model_validate(r) for r in servicio_horno.listar_registros(db, orden.id)
         ],
         recepciones=[
-            RecepcionSalida.model_validate(r)
-            for r in servicio_saborizado.listar_recepciones(db, orden.id)
+            RecepcionSalida.model_validate(r) for r in servicio_saborizado.listar_recepciones(db, orden.id)
         ],
     )
 
@@ -293,7 +288,7 @@ def detalle(orden_id: int, db: BD, _: VeOrdenes):
 def editar(orden_id: int, datos: OrdenGuardar, db: BD, usuario: Supervisa):
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     _verificar_puede_gestionar(orden, usuario)
-    return servicio_ordenes.editar_orden(db, orden, datos)
+    return servicio_ordenes.editar_orden(db, orden, datos, usuario)
 
 
 @router.post("/{orden_id}/iniciar", response_model=OrdenSalida)
@@ -301,21 +296,21 @@ def iniciar(orden_id: int, db: BD, usuario: TomaOrdenes):
     """El operario toma la orden que va a trabajar y arranca la producción."""
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     _verificar_puede_iniciar(orden, usuario)
-    return servicio_ordenes.iniciar_orden(db, orden)
+    return servicio_ordenes.iniciar_orden(db, orden, usuario)
 
 
 @router.post("/{orden_id}/finalizar", response_model=OrdenSalida)
 def finalizar(orden_id: int, db: BD, usuario: Supervisa):
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     _verificar_puede_gestionar(orden, usuario)
-    return servicio_ordenes.finalizar_orden(db, orden)
+    return servicio_ordenes.finalizar_orden(db, orden, usuario)
 
 
 @router.post("/{orden_id}/cancelar", response_model=OrdenSalida)
 def cancelar(orden_id: int, db: BD, usuario: Supervisa):
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     _verificar_puede_gestionar(orden, usuario)
-    return servicio_ordenes.cancelar_orden(db, orden)
+    return servicio_ordenes.cancelar_orden(db, orden, usuario)
 
 
 @router.delete("/{orden_id}")
@@ -347,9 +342,7 @@ def guardar_formula(orden_id: int, datos: FormulaGuardar, db: BD, usuario: Bodeg
 
 
 @router.post("/{orden_id}/formula/proyeccion", response_model=FormulaProyeccionSalida)
-def proyectar_formula(
-    orden_id: int, datos: FormulaProyeccionGuardar, db: BD, _: BodegaFormula
-):
+def proyectar_formula(orden_id: int, datos: FormulaProyeccionGuardar, db: BD, _: BodegaFormula):
     """Vista previa de la mezcla o sugerencia; no guarda nada."""
     orden = servicio_ordenes.obtener_orden(db, orden_id)
     return servicio_formula.proyectar(db, orden, datos)
@@ -370,10 +363,22 @@ def listar_registros_horno(orden_id: int, db: BD, _: VeOrdenes):
     status_code=status.HTTP_201_CREATED,
 )
 def crear_registro_horno(
-    orden_id: int, datos: RegistroHornoGuardar, db: BD, usuario: OperarioHorno
+    orden_id: int,
+    datos: RegistroHornoGuardar,
+    db: BD,
+    usuario: OperarioHorno,
+    idempotency_key: Annotated[str | None, Header(min_length=16, max_length=128)] = None,
 ):
     orden = servicio_ordenes.obtener_orden(db, orden_id)
-    return servicio_horno.crear_registro(db, orden, datos, usuario)
+    return ejecutar_idempotente(
+        db,
+        usuario.id,
+        f"horno:{orden_id}",
+        idempotency_key,
+        datos,
+        lambda: servicio_horno.crear_registro(db, orden, datos, usuario),
+        RegistroHornoSalida,
+    )
 
 
 @router.put("/{orden_id}/registros-horno/{registro_id}", response_model=RegistroHornoSalida)
@@ -381,14 +386,16 @@ def editar_registro_horno(
     orden_id: int, registro_id: int, datos: RegistroHornoGuardar, db: BD, usuario: OperarioHorno
 ):
     registro = servicio_horno.obtener_registro(db, registro_id)
+    if registro.orden_id != orden_id:
+        raise RecursoNoEncontrado("Ese registro no pertenece a la orden indicada.")
     return servicio_horno.editar_registro(db, registro, datos, usuario)
 
 
-@router.delete(
-    "/{orden_id}/registros-horno/{registro_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/{orden_id}/registros-horno/{registro_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_registro_horno(orden_id: int, registro_id: int, db: BD, admin: SoloAdmin) -> None:
     registro = servicio_horno.obtener_registro(db, registro_id)
+    if registro.orden_id != orden_id:
+        raise RecursoNoEncontrado("Ese registro no pertenece a la orden indicada.")
     servicio_horno.eliminar_registro(db, registro, admin)
 
 
@@ -401,14 +408,24 @@ def listar_recepciones(orden_id: int, db: BD, _: VeOrdenes):
     return servicio_saborizado.listar_recepciones(db, orden_id)
 
 
-@router.post(
-    "/{orden_id}/recepciones", response_model=RecepcionSalida, status_code=status.HTTP_201_CREATED
-)
+@router.post("/{orden_id}/recepciones", response_model=RecepcionSalida, status_code=status.HTTP_201_CREATED)
 def crear_recepcion(
-    orden_id: int, datos: RecepcionGuardar, db: BD, usuario: OperarioSaborizado
+    orden_id: int,
+    datos: RecepcionGuardar,
+    db: BD,
+    usuario: OperarioSaborizado,
+    idempotency_key: Annotated[str | None, Header(min_length=16, max_length=128)] = None,
 ):
     orden = servicio_ordenes.obtener_orden(db, orden_id)
-    return servicio_saborizado.crear_recepcion(db, orden, datos, usuario)
+    return ejecutar_idempotente(
+        db,
+        usuario.id,
+        f"saborizado:{orden_id}",
+        idempotency_key,
+        datos,
+        lambda: servicio_saborizado.crear_recepcion(db, orden, datos, usuario),
+        RecepcionSalida,
+    )
 
 
 @router.put("/{orden_id}/recepciones/{recepcion_id}", response_model=RecepcionSalida)
@@ -416,10 +433,14 @@ def editar_recepcion(
     orden_id: int, recepcion_id: int, datos: RecepcionGuardar, db: BD, usuario: OperarioSaborizado
 ):
     recepcion = servicio_saborizado.obtener_recepcion(db, recepcion_id)
+    if recepcion.orden_id != orden_id:
+        raise RecursoNoEncontrado("Esa recepción no pertenece a la orden indicada.")
     return servicio_saborizado.editar_recepcion(db, recepcion, datos, usuario)
 
 
 @router.delete("/{orden_id}/recepciones/{recepcion_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_recepcion(orden_id: int, recepcion_id: int, db: BD, admin: SoloAdmin) -> None:
     recepcion = servicio_saborizado.obtener_recepcion(db, recepcion_id)
+    if recepcion.orden_id != orden_id:
+        raise RecursoNoEncontrado("Esa recepción no pertenece a la orden indicada.")
     servicio_saborizado.eliminar_recepcion(db, recepcion, admin)

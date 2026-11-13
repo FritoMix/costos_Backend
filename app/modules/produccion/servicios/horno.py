@@ -21,7 +21,7 @@ vacias: el registro se guarda igual y no se inventa ningun valor.
 """
 
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
 from app.core.tiempo import combinar_fecha_y_hora
+from app.db.auditoria import registrar, snapshot
+from app.db.transacciones import atomica
 from app.modules.bodega.service import obtener as obtener_referencia_papa
 from app.modules.catalogos.models import Horno, TipoDesperdicio
 from app.modules.catalogos.service import obtener_densidad_vigente
@@ -70,13 +72,18 @@ def calcular_aceite(
     if litros_por_cm is None:
         return None, None, None, None
 
-    volumen = (diferencia_cm * litros_por_cm).quantize(Decimal("0.01"))
+    volumen = (diferencia_cm * litros_por_cm).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     densidad = obtener_densidad_vigente(db, horno.id, fecha)
     if densidad is None:
         return litros_por_cm, volumen, None, None
 
-    return litros_por_cm, volumen, densidad, (volumen * densidad).quantize(Decimal("0.01"))
+    return (
+        litros_por_cm,
+        volumen,
+        densidad,
+        (volumen * densidad).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+    )
 
 
 def listar_registros(db: Session, orden_id: int) -> list[RegistroHorno]:
@@ -147,12 +154,8 @@ def _filas_desde_formula(
     superen el restante planificado (el registro que se edita se excluye
     para no contar dos veces su version anterior).
     """
-    formula_por_referencia = {
-        fila.referencia_papa_id: fila for fila in orden.referencias
-    }
-    producido = producido_por_referencia(
-        db, orden.id, excluir_registro_id=registro.id
-    )
+    formula_por_referencia = {fila.referencia_papa_id: fila for fila in orden.referencias}
+    producido = producido_por_referencia(db, orden.id, excluir_registro_id=registro.id)
     filas: list[RegistroHornoReferencia] = []
     for referencia_id, bultos in mezcla:
         fila_formula = formula_por_referencia.get(referencia_id)
@@ -173,9 +176,7 @@ def _filas_desde_formula(
         if fila_formula.rendimiento_fritura_pct is None:
             kg_fritos = None
         else:
-            kg_fritos = calcular_kg_fritos_estimados(
-                kg_crudos, fila_formula.rendimiento_fritura_pct
-            )
+            kg_fritos = calcular_kg_fritos_estimados(kg_crudos, fila_formula.rendimiento_fritura_pct)
         filas.append(
             RegistroHornoReferencia(
                 referencia_papa_id=referencia_id,
@@ -200,23 +201,17 @@ def _filas_desde_catalogo(
     catalogo, con las reglas previas a la formula por orden.
     """
     if len(mezcla) > 1:
-        raise ErrorDeValidacion(
-            "Esta orden es histórica y solo admite una referencia por tanda."
-        )
+        raise ErrorDeValidacion("Esta orden es histórica y solo admite una referencia por tanda.")
     referencia_id, bultos = mezcla[0]
     referencia = obtener_referencia_papa(db, referencia_id)
     if not referencia.activo and referencia.id != registro.referencia_papa_id:
-        raise ErrorDeValidacion(
-            "La referencia de papa seleccionada está inactiva. Elige otra."
-        )
+        raise ErrorDeValidacion("La referencia de papa seleccionada está inactiva. Elige otra.")
 
     kg_crudos = calcular_kg_crudos(bultos, referencia.peso_promedio_bulto_kg)
     if referencia.rendimiento_fritura_pct is None:
         kg_fritos = None
     else:
-        kg_fritos = calcular_kg_fritos_estimados(
-            kg_crudos, referencia.rendimiento_fritura_pct
-        )
+        kg_fritos = calcular_kg_fritos_estimados(kg_crudos, referencia.rendimiento_fritura_pct)
     return [
         RegistroHornoReferencia(
             referencia_papa_id=referencia.id,
@@ -252,17 +247,13 @@ def _aplicar_datos(
         filas = _filas_desde_formula(db, orden, registro, mezcla)
     else:
         if orden.formula_obligatoria:
-            raise ErrorDeValidacion(
-                "Bodega debe definir la fórmula antes de registrar tandas."
-            )
+            raise ErrorDeValidacion("Bodega debe definir la fórmula antes de registrar tandas.")
         filas = _filas_desde_catalogo(db, registro, mezcla)
     _validar_capacidad_tanda(orden, total_bultos)
 
     _validar_niveles_aceite(datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm)
     diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
-    litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
-        db, orden.horno, orden.fecha, diferencia
-    )
+    litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(db, orden.horno, orden.fecha, diferencia)
     inicio, fin = combinar_fecha_y_hora(orden.fecha, datos.hora_inicio, datos.hora_fin)
     validar_duracion_tanda(inicio=inicio, fin=fin)
     validar_ventana_registro(
@@ -291,14 +282,14 @@ def _aplicar_datos(
 
     registro.hora_inicio = inicio
     registro.hora_fin = fin
-    registro.cantidad_bultos = total_bultos.quantize(CENTAVOS)
-    registro.kg_crudos_calculados = sum(
-        (fila.kg_crudos_calculados for fila in filas), Decimal("0")
-    ).quantize(CENTAVOS)
+    registro.cantidad_bultos = total_bultos.quantize(CENTAVOS, rounding=ROUND_HALF_UP)
+    registro.kg_crudos_calculados = sum((fila.kg_crudos_calculados for fila in filas), Decimal("0")).quantize(
+        CENTAVOS
+    )
     if all(fila.kg_fritos_estimados is not None for fila in filas):
         registro.kg_fritos_estimados = sum(
             (fila.kg_fritos_estimados for fila in filas), Decimal("0")
-        ).quantize(CENTAVOS)
+        ).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
     else:
         registro.kg_fritos_estimados = None
     registro.operarios_seleccion = datos.operarios_seleccion
@@ -333,24 +324,27 @@ def _aplicar_datos(
         )
 
 
+@atomica
 def crear_registro(
     db: Session, orden: OrdenProduccion, datos: RegistroHornoGuardar, usuario: Usuario
 ) -> RegistroHorno:
+    orden = bloquear_orden(db, orden.id)
     if orden.estado != EstadoOrden.EN_PRODUCCION:
         raise ErrorDeValidacion(
             "Solo se pueden registrar datos de horno para una orden que esté En producción."
         )
 
-    bloquear_orden(db, orden.id)
     registro = RegistroHorno(orden_id=orden.id, usuario_id=usuario.id)
     registro.orden = orden
     _aplicar_datos(db, registro, orden, datos)
     db.add(registro)
-    db.commit()
+    db.flush()
     db.refresh(registro)
+    registrar(db, "horno", registro.id, "crear", usuario.id, None, snapshot(registro))
     return registro
 
 
+@atomica
 def editar_registro(
     db: Session, registro: RegistroHorno, datos: RegistroHornoGuardar, usuario: Usuario
 ) -> RegistroHorno:
@@ -363,22 +357,34 @@ def editar_registro(
     esa parte queda completa. Es una correccion activa, no un recalculo
     silencioso del historial.
     """
+    bloquear_orden(db, registro.orden_id)
+    db.refresh(registro)
+    antes = snapshot(registro)
+    if registro.eliminado:
+        raise RecursoNoEncontrado("Ese registro ya fue eliminado.")
     if registro.orden.estado != EstadoOrden.EN_PRODUCCION:
         raise ErrorDeValidacion(
             "Solo se puede editar un registro de horno mientras la orden esté En producción."
         )
     _verificar_autoria(registro, usuario)
-    bloquear_orden(db, registro.orden_id)
     _aplicar_datos(db, registro, registro.orden, datos)
-    db.commit()
+    db.flush()
     db.refresh(registro)
+    registrar(db, "horno", registro.id, "editar", usuario.id, antes, snapshot(registro))
     return registro
 
 
+@atomica
 def eliminar_registro(db: Session, registro: RegistroHorno, usuario: Usuario) -> None:
     """Borrado suave (solo Administrador; ver el router)."""
+    orden = bloquear_orden(db, registro.orden_id)
+    db.refresh(registro)
+    antes = snapshot(registro)
+    if orden.estado != EstadoOrden.EN_PRODUCCION:
+        raise ErrorDeValidacion("No se pueden borrar registros de una orden cerrada.")
     marcar_eliminado_por(db, registro, usuario)
-    db.commit()
+    db.flush()
+    registrar(db, "horno", registro.id, "eliminar", usuario.id, antes, snapshot(registro))
 
 
 def _verificar_autoria(registro: RegistroHorno, usuario: Usuario) -> None:
