@@ -9,7 +9,7 @@ Railway, un VPS...) no hay contenedor de Flyway: alguien tiene que aplicar
 el esquema o la base queda vacia y la app falla en la primera consulta.
 
 Este modulo lee los mismos archivos `migraciones/V<n>__<descripcion>.sql`
-y aplica los que falten, en orden y cada uno en su propia transaccion.
+y aplica los que falten, en orden dentro de una transacción protegida frente a arranques concurrentes.
 
 Convive con Flyway
 ------------------
@@ -93,9 +93,8 @@ def aplicar_migraciones_pendientes(engine: Engine, carpeta: Path | None = None) 
     """
     Aplica las migraciones que falten. Devuelve cuantas se aplicaron.
 
-    Cada archivo va en su propia transaccion: si uno falla, los anteriores
-    quedan aplicados y el error se propaga para que el arranque se detenga
-    (mejor no arrancar que arrancar contra una base a medio migrar).
+    Todas las pendientes se confirman juntas. Si una falla, se revierte el lote
+    y se detiene el arranque. El bloqueo transaccional serializa los workers.
     """
     carpeta = carpeta or _carpeta_por_defecto()
     if not carpeta.is_dir():
@@ -107,23 +106,19 @@ def aplicar_migraciones_pendientes(engine: Engine, carpeta: Path | None = None) 
         logger.warning("La carpeta %s no tiene migraciones.", carpeta)
         return 0
 
+    # Una única transacción y bloqueo compartido por todos los workers.
+    # El segundo arranque vuelve a leer el historial después de obtener el lock.
     with engine.begin() as conexion:
+        conexion.execute(text("SELECT pg_advisory_xact_lock(741902631)"))
         aplicadas = _versiones_aplicadas(conexion)
-
-    pendientes = [fila for fila in archivos if fila[0] not in aplicadas]
-    if not pendientes:
-        logger.info("Base de datos al día: %d migraciones ya aplicadas.", len(aplicadas))
-        return 0
-
-    for version, descripcion, ruta in pendientes:
-        sql = ruta.read_text(encoding="utf-8")
-        logger.info("Aplicando migración V%d - %s", version, descripcion)
-        with engine.begin() as conexion:
-            conexion.execute(text(sql))
+        pendientes = [fila for fila in archivos if fila[0] not in aplicadas]
+        for version, descripcion, ruta in pendientes:
+            logger.info("Aplicando migración V%d - %s", version, descripcion)
+            conexion.execute(text(ruta.read_text(encoding="utf-8")))
             conexion.execute(
                 text(
                     f"INSERT INTO {TABLA_CONTROL} (version, descripcion) "
-                    "VALUES (:version, :descripcion) ON CONFLICT (version) DO NOTHING"
+                    "VALUES (:version, :descripcion)"
                 ),
                 {"version": version, "descripcion": descripcion[:200]},
             )

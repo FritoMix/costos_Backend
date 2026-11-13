@@ -59,8 +59,8 @@ class UsuarioActualizar(BaseModel):
 
 
 class LoginPeticion(BaseModel):
-    nombre_usuario: str = Field(min_length=1)
-    password: str = Field(min_length=1)
+    nombre_usuario: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class SesionSalida(BaseModel):
@@ -71,6 +71,7 @@ class SesionSalida(BaseModel):
     """
 
     expira_en_segundos: int
+    inactividad_segundos: int
     usuario: UsuarioSalida
 
 

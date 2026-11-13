@@ -9,6 +9,7 @@ Contrasenas y tokens de sesion.
 """
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import bcrypt
 import jwt
@@ -51,6 +52,7 @@ def crear_token_acceso(usuario_id: int, rol: str, token_version: int = 0) -> tup
         "tv": token_version,
         "exp": expira_en,
         "iat": datetime.now(UTC),
+        "jti": uuid4().hex,
     }
     token = jwt.encode(contenido, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, int(duracion.total_seconds())

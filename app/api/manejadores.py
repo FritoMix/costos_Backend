@@ -37,6 +37,8 @@ def registrar_manejadores(app: FastAPI) -> None:
     @app.exception_handler(ErrorDeAplicacion)
     async def _error_de_aplicacion(_: Request, exc: ErrorDeAplicacion) -> JSONResponse:
         respuesta = JSONResponse(status_code=exc.codigo_http, content={"detail": exc.mensaje})
+        if getattr(exc, "retry_after", None) is not None:
+            respuesta.headers["Retry-After"] = str(exc.retry_after)
         if exc.codigo_http == 401:
             # Le dice al navegador (y al frontend) que hace falta un token.
             respuesta.headers["WWW-Authenticate"] = "Bearer"

@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "clave-de-desarrollo-cambiar-en-produccion"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
+    session_idle_minutes: int = Field(default=30, ge=1, le=480)
+    login_account_attempts: int = Field(default=5, ge=2, le=100)
+    login_ip_attempts: int = Field(default=20, ge=5, le=500)
 
     # --- Limite de peticiones (rate limiting) ---
     # 120/min por IP es de sobra para un operario humano. Se baja con

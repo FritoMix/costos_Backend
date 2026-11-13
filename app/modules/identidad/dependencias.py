@@ -17,6 +17,7 @@ from app.core.errores import CredencialesInvalidas, PermisoDenegado
 from app.core.seguridad import leer_token_acceso
 from app.db.session import get_db
 from app.modules.identidad.models import Usuario
+from app.modules.identidad.sesiones import validar_sesion
 
 
 def usuario_actual(
@@ -34,7 +35,15 @@ def usuario_actual(
     if usuario_id is None:
         raise CredencialesInvalidas("Tu sesión no es válida. Vuelve a iniciar sesión.")
 
-    usuario = db.get(Usuario, int(usuario_id))
+    try:
+        identificador = int(usuario_id)
+        if identificador <= 0:
+            raise ValueError
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise CredencialesInvalidas("Tu sesión no es válida. Vuelve a iniciar sesión.") from exc
+
+    validar_sesion(db, token, identificador)
+    usuario = db.get(Usuario, identificador)
     if usuario is None or not usuario.puede_entrar:
         # La cuenta fue desactivada o eliminada despues de iniciar sesion.
         raise CredencialesInvalidas("Tu cuenta ya no está habilitada.")

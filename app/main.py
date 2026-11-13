@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
 from app.api.manejadores import registrar_manejadores
@@ -91,9 +92,7 @@ async def ciclo_de_vida(_: FastAPI) -> AsyncIterator[None]:
         except OperationalError:
             # El traceback de SQLAlchemy no dice QUE falta configurar, asi que
             # se explica antes de dejarlo subir.
-            logger.error(
-                "No se pudo conectar a la base de datos en %s", settings.destino_base_datos
-            )
+            logger.error("No se pudo conectar a la base de datos en %s", settings.destino_base_datos)
             if settings.usa_host_de_compose:
                 logger.error(
                     'El host "db" solo existe dentro de Docker Compose. Si esto corre en '
@@ -154,8 +153,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     # Sin esto el navegador no deja leer el nombre del archivo exportado ni el ID de traza.
-    expose_headers=["Content-Disposition", "X-Request-ID"],
+    expose_headers=["Content-Disposition", "X-Request-ID", "X-Sesion-Inactividad-Segundos", "Retry-After"],
 )
+
+
+@app.middleware("http")
+async def proteger_autenticacion(request, call_next):
+    if request.url.path.startswith("/api/"):
+        origen = request.headers.get("origin")
+        propio = str(request.base_url).rstrip("/")
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and origen:
+            if origen not in {*settings.origenes_cors, propio}:
+                return JSONResponse(status_code=403, content={"detail": "Origen no autorizado."})
+    respuesta = await call_next(request)
+    if request.url.path.startswith("/api/v1/auth/"):
+        respuesta.headers["Cache-Control"] = "no-store"
+    return respuesta
 
 
 @app.middleware("http")

@@ -34,6 +34,10 @@ projects:
               # Contrasena del administrador inicial. Se define en el panel.
               - key: ADMIN_PASSWORD
                 sync: false
+              - key: CORS_ORIGINS
+                sync: false
+              - key: SESSION_IDLE_MINUTES
+                value: 30
               - key: TZ
                 value: America/Bogota
               - key: RATE_LIMIT_MINUTE

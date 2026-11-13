@@ -6,12 +6,14 @@ Rutas HTTP del modulo Identidad:
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.seguridad import borrar_cookie_sesion, crear_token_acceso, poner_cookie_sesion
+from app.core.config import settings
+from app.core.limite import obtener_ip_cliente
+from app.core.seguridad import borrar_cookie_sesion, poner_cookie_sesion
 from app.db.session import get_db
-from app.modules.identidad import service
+from app.modules.identidad import service, sesiones
 from app.modules.identidad.dependencias import UsuarioAutenticado, requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.identidad.schemas import (
@@ -35,31 +37,40 @@ router_usuarios = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
 
 @router_auth.post("/login", response_model=SesionSalida)
-def iniciar_sesion(datos: LoginPeticion, db: BD, response: Response) -> SesionSalida:
-    usuario = service.autenticar(db, datos.nombre_usuario.strip().lower(), datos.password)
-    token, segundos = crear_token_acceso(
-        usuario.id, usuario.rol.codigo, usuario.token_version
+def iniciar_sesion(datos: LoginPeticion, db: BD, response: Response, request: Request) -> SesionSalida:
+    usuario = sesiones.autenticar_protegido(
+        db, datos.nombre_usuario.strip().lower(), datos.password, obtener_ip_cliente(request)
     )
+    token, segundos = sesiones.emitir_sesion(db, usuario)
     # El token se entrega SOLO como cookie HttpOnly: no vuelve en el cuerpo,
     # asi que el JavaScript del navegador nunca llega a verlo.
     poner_cookie_sesion(response, token, segundos)
     return SesionSalida(
         expira_en_segundos=segundos,
+        inactividad_segundos=settings.session_idle_minutes * 60,
         usuario=UsuarioSalida.model_validate(usuario),
     )
 
 
 @router_auth.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def cerrar_sesion(response: Response) -> None:
+def cerrar_sesion(response: Response, request: Request, db: BD) -> None:
     """Borra la cookie de sesion. No exige estar autenticado: si ya no hay
     sesion valida, igual limpia cualquier cookie residual."""
+    sesiones.revocar_sesion(db, request.cookies.get(settings.cookie_nombre))
     borrar_cookie_sesion(response)
 
 
 @router_auth.get("/yo", response_model=UsuarioSalida)
-def usuario_conectado(usuario: UsuarioAutenticado) -> Usuario:
+def usuario_conectado(usuario: UsuarioAutenticado, response: Response, request: Request, db: BD) -> Usuario:
     """Con quien esta trabajando la app ahora mismo (lo usa el frontend al abrir)."""
+    sesiones.registrar_actividad(db, request.cookies[settings.cookie_nombre])
+    response.headers["X-Sesion-Inactividad-Segundos"] = str(settings.session_idle_minutes * 60)
     return usuario
+
+
+@router_auth.post("/actividad", status_code=status.HTTP_204_NO_CONTENT)
+def actividad(request: Request, db: BD, _: UsuarioAutenticado) -> None:
+    sesiones.registrar_actividad(db, request.cookies[settings.cookie_nombre])
 
 
 @router_auth.post("/cambiar-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -72,9 +83,7 @@ def cambiar_password(
     service.cambiar_password_propia(db, usuario, datos.password_actual, datos.password_nueva)
     # La contrasena cambio y la version subio: se emite un token nuevo para
     # que esta sesion siga abierta, mientras las demas quedan revocadas.
-    token, segundos = crear_token_acceso(
-        usuario.id, usuario.rol.codigo, usuario.token_version
-    )
+    token, segundos = sesiones.emitir_sesion(db, usuario)
     poner_cookie_sesion(response, token, segundos)
 
 
