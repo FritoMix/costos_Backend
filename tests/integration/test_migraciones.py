@@ -138,11 +138,21 @@ def test_una_sola_formula_activa_por_producto(engine_integracion):
 
 
 def test_arranques_concurrentes_aplican_una_migracion_una_sola_vez(engine_integracion, tmp_path):
+    import hashlib
+    import json
+    import shutil
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
-    (tmp_path / "V99__prueba_concurrencia.sql").write_text(
+    for archivo in CARPETA_MIGRACIONES.iterdir():
+        if archivo.is_file():
+            shutil.copy2(archivo, tmp_path / archivo.name)
+    version = max(int(p.name.split("__")[0][1:]) for p in tmp_path.glob("V*.sql")) + 1
+    (tmp_path / f"V{version}__prueba_concurrencia.sql").write_text(
         "CREATE TABLE prueba_migracion_concurrente (id INTEGER)", encoding="utf-8"
+    )
+    (tmp_path / "checksums.json").write_text(
+        json.dumps({p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in tmp_path.glob("V*.sql")})
     )
     barrera = Barrier(2)
 
@@ -157,4 +167,4 @@ def test_arranques_concurrentes_aplican_una_migracion_una_sola_vez(engine_integr
     finally:
         with engine_integracion.begin() as conexion:
             conexion.execute(text("DROP TABLE IF EXISTS prueba_migracion_concurrente"))
-            conexion.execute(text("DELETE FROM esquema_migraciones WHERE version = 99"))
+            conexion.execute(text("DELETE FROM esquema_migraciones WHERE version = :v"), {"v": version})

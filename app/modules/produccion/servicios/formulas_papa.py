@@ -19,10 +19,11 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.db.transacciones import atomica
 from app.modules.bodega.models import ReferenciaPapa
 from app.modules.catalogos.models import Horno, Producto
 from app.modules.identidad.models import Usuario
@@ -155,6 +156,17 @@ def obtener_activa(db: Session, producto_id: int) -> FormulaPapa | None:
     )
 
 
+def _bloquear_catalogo(db: Session) -> None:
+    db.execute(text("SELECT pg_advisory_xact_lock(741902632)"))
+
+
+def _recargar_formula(db: Session, formula: FormulaPapa) -> FormulaPapa:
+    _bloquear_catalogo(db)
+    db.refresh(formula)
+    db.expire(formula, ["referencias"])
+    return formula
+
+
 # --- Escritura ---------------------------------------------------------------
 
 
@@ -209,8 +221,10 @@ def _fila_referencia(referencia, bultos: int) -> FormulaPapaReferencia:
     )
 
 
+@atomica
 def crear(db: Session, datos: FormulaPapaGuardar, usuario: Usuario) -> FormulaPapaSalida:
     """Crea una plantilla INACTIVA; se activa con el endpoint de activación."""
+    _bloquear_catalogo(db)
     producto = _validar_producto(db, datos.producto_id)
     nombre = datos.nombre.strip()
     if not nombre:
@@ -230,7 +244,7 @@ def crear(db: Session, datos: FormulaPapaGuardar, usuario: Usuario) -> FormulaPa
             _fila_referencia(referencia, bultos)
         )
     db.add(formula)
-    db.commit()
+    db.flush()
     db.refresh(formula)
     return salida(formula)
 
@@ -240,18 +254,22 @@ def detalle(db: Session, formula_id: int) -> FormulaPapaSalida:
     return salida(obtener(db, formula_id))
 
 
+@atomica
 def actualizar(
     db: Session, formula: FormulaPapa, datos: FormulaPapaGuardar
 ) -> FormulaPapaSalida:
     """Reemplaza nombre, producto, notas y mezcla. Las ordenes ya creadas no cambian."""
+    formula = _recargar_formula(db, formula)
     _aplicar_datos(db, formula, datos)
-    db.commit()
+    db.flush()
     db.refresh(formula)
     return salida(formula)
 
 
+@atomica
 def activar(db: Session, formula: FormulaPapa) -> FormulaPapaSalida:
     """Activa esta formula y desactiva la que estuviera activa del producto."""
+    formula = _recargar_formula(db, formula)
     db.execute(
         update(FormulaPapa)
         .where(
@@ -263,26 +281,30 @@ def activar(db: Session, formula: FormulaPapa) -> FormulaPapaSalida:
     )
     formula.activa = True
     formula.fecha_actualizacion = datetime.now(UTC)
-    db.commit()
+    db.flush()
     db.refresh(formula)
     return salida(formula)
 
 
+@atomica
 def desactivar(db: Session, formula: FormulaPapa) -> FormulaPapaSalida:
+    formula = _recargar_formula(db, formula)
     formula.activa = False
     formula.fecha_actualizacion = datetime.now(UTC)
-    db.commit()
+    db.flush()
     db.refresh(formula)
     return salida(formula)
 
 
+@atomica
 def eliminar(db: Session, formula: FormulaPapa) -> None:
+    formula = _recargar_formula(db, formula)
     if formula.activa:
         raise ErrorDeValidacion(
             "No puedes eliminar la fórmula activa. Desactívala o activa otra primero."
         )
     db.delete(formula)
-    db.commit()
+    db.flush()
 
 
 # --- Reparto de la capacidad ------------------------------------------------
@@ -370,6 +392,7 @@ def activa_para_orden(
     return salida(formula, horas=horas) if formula else None
 
 
+@atomica
 def aplicar_a_orden(db: Session, orden: OrdenProduccion) -> bool:
     """
     Copia la formula activa del producto a la orden recien creada.
@@ -378,6 +401,7 @@ def aplicar_a_orden(db: Session, orden: OrdenProduccion) -> bool:
     cabe en el horno o no alcanza la cantidad pedida: en ese caso Bodega la
     define a mano y recibe el aviso.
     """
+    _bloquear_catalogo(db)
     activa = obtener_activa(db, orden.producto_id)
     if activa is None:
         return False
@@ -405,6 +429,6 @@ def aplicar_a_orden(db: Session, orden: OrdenProduccion) -> bool:
     orden.formula_actualizada_por_id = activa.creado_por_id
     orden.formula_fecha_actualizacion = datetime.now(UTC)
     orden.formula_papa_id = activa.id
-    db.commit()
+    db.flush()
     db.refresh(orden)
     return True

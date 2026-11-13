@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
 from app.core.tiempo import hoy_local
+from app.db.auditoria import estado_orden, registrar
+from app.db.transacciones import atomica
 from app.modules.catalogos.models import Horno, Producto
 from app.modules.catalogos.service import obtener_configuracion
 from app.modules.identidad.models import RolCodigo, Usuario
@@ -152,9 +154,7 @@ def _validar_catalogos(db: Session, datos: OrdenGuardar) -> tuple[Horno, Product
     if producto is None or not producto.activo:
         raise ErrorDeValidacion("El producto seleccionado no es válido.")
     if producto.categoria_id != datos.categoria_id:
-        raise ErrorDeValidacion(
-            f'El producto "{producto.nombre_comercial}" no pertenece a esa categoría.'
-        )
+        raise ErrorDeValidacion(f'El producto "{producto.nombre_comercial}" no pertenece a esa categoría.')
 
     return horno, producto
 
@@ -196,6 +196,7 @@ def calcular_cantidad_programada(
 # --- Operaciones -----------------------------------------------------------
 
 
+@atomica
 def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenProduccion:
     _horno, producto = _validar_catalogos(db, datos)
     cantidad_kg, canastillas = calcular_cantidad_programada(db, datos, producto)
@@ -220,41 +221,44 @@ def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenP
         formula_obligatoria=True,
     )
     db.add(orden)
-    db.commit()
+    db.flush()
+    aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
+    if aplicada:
+        notificaciones.avisar_formula_lista(db, orden)
+    else:
+        notificaciones.avisar_orden_para_bodega(db, orden)
+    db.flush()
     db.refresh(orden)
 
-    # Si el producto tiene una formula activa de Bodega y cabe en el horno
-    # elegido, la orden nace con esa mezcla copiada y se avisa a horno y al
-    # supervisor. Si no hay activa (o no cabe), se pide a Bodega como antes.
-    # La orden YA quedo creada: si algo falla al aplicar o notificar, se
-    # registra el problema pero no se le devuelve un error al supervisor.
-    try:
-        aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
-        if aplicada:
-            notificaciones.avisar_formula_lista(db, orden)
-        else:
-            notificaciones.avisar_orden_para_bodega(db, orden)
-    except Exception:  # noqa: BLE001
-        logger.exception("No se pudo preparar la fórmula de la orden %s", orden.numero_orden)
-        try:
-            notificaciones.avisar_orden_para_bodega(db, orden)
-        except Exception:  # noqa: BLE001
-            logger.exception("No se pudo avisar a Bodega de la orden %s", orden.numero_orden)
-
+    registrar(db, "orden", orden.id, "crear", supervisor.id, None, estado_orden(orden))
     return orden
 
 
-def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> OrdenProduccion:
+@atomica
+def editar_orden(
+    db: Session, orden: OrdenProduccion, datos: OrdenGuardar, usuario: Usuario | None = None
+) -> OrdenProduccion:
     """
     Corrige una orden ya creada, por si el supervisor se equivoco. Solo
     mientras sigue activa: una vez Finalizada o Cancelada no se toca.
     """
+    orden = bloquear_orden(db, orden.id)
+    antes = estado_orden(orden)
     if orden.estado not in EstadoOrden.ACTIVOS:
-        raise ErrorDeValidacion(
-            "Esta orden ya no se puede editar porque está Finalizada o Cancelada."
-        )
+        raise ErrorDeValidacion("Esta orden ya no se puede editar porque está Finalizada o Cancelada.")
 
-    bloquear_orden(db, orden.id)
+    cambia_producto = datos.producto_id != orden.producto_id or datos.categoria_id != orden.categoria_id
+    if cambia_producto and orden.estado == EstadoOrden.EN_PRODUCCION:
+        raise ErrorDeValidacion("No puedes cambiar el producto de una orden que ya está en producción.")
+    anterior_formula = None
+    if cambia_producto and orden.referencias:
+        anterior_formula = servicio_formula.obtener(db, orden).model_dump(mode="json")
+        orden.referencias.clear()
+        orden.formula_papa_id = None
+        orden.formula_notas = None
+        orden.formula_actualizada_por_id = None
+        orden.formula_fecha_actualizacion = None
+        db.flush()
     horno, producto = _validar_catalogos(db, datos)
 
     if datos.horas_produccion is not None:
@@ -294,9 +298,7 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
             )
         )
         if ocupado is not None:
-            raise ErrorDeValidacion(
-                f"Ese horno ya tiene la orden {ocupado.numero_orden} en producción."
-            )
+            raise ErrorDeValidacion(f"Ese horno ya tiene la orden {ocupado.numero_orden} en producción.")
 
     cantidad_kg, canastillas = calcular_cantidad_programada(db, datos, producto)
 
@@ -322,9 +324,10 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
     orden.destino = datos.destino
 
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as exc:
-        db.rollback()
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "ux_un_horno_en_produccion":
+            raise
         raise ErrorDeValidacion(
             "Ese horno acaba de quedar ocupado por otra orden. Intenta de nuevo."
         ) from exc
@@ -334,18 +337,37 @@ def editar_orden(db: Session, orden: OrdenProduccion, datos: OrdenGuardar) -> Or
     # recalculan (la mezcla por tanda no cambia).
     if orden.referencias and orden.estado == EstadoOrden.PENDIENTE:
         servicio_formula.recalcular_totales(db, orden)
-        db.commit()
+        db.flush()
         db.refresh(orden)
+    if cambia_producto:
+        aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
+        if aplicada:
+            notificaciones.avisar_formula_lista(db, orden)
+        else:
+            notificaciones.avisar_orden_para_bodega(db, orden)
+        registrar(
+            db,
+            "formula_orden",
+            orden.id,
+            "cambiar_producto",
+            usuario.id if usuario else None,
+            anterior_formula,
+            servicio_formula.obtener(db, orden).model_dump(mode="json"),
+        )
+    registrar(db, "orden", orden.id, "editar", usuario.id if usuario else None, antes, estado_orden(orden))
     return orden
 
 
-def iniciar_orden(db: Session, orden: OrdenProduccion) -> OrdenProduccion:
+@atomica
+def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None = None) -> OrdenProduccion:
+    orden = bloquear_orden(db, orden.id)
+    antes = estado_orden(orden)
+    if orden.estado == EstadoOrden.EN_PRODUCCION:
+        return orden
     if orden.estado != EstadoOrden.PENDIENTE:
         raise ErrorDeValidacion("Solo se puede iniciar una orden que esté Pendiente.")
     if orden.formula_obligatoria and not orden.referencias:
-        raise ErrorDeValidacion(
-            "Bodega debe definir la fórmula antes de iniciar la producción."
-        )
+        raise ErrorDeValidacion("Bodega debe definir la fórmula antes de iniciar la producción.")
 
     ocupado = db.scalar(
         select(OrdenProduccion).where(
@@ -363,46 +385,57 @@ def iniciar_orden(db: Session, orden: OrdenProduccion) -> OrdenProduccion:
     orden.estado = EstadoOrden.EN_PRODUCCION
     orden.hora_inicio = datetime.now(UTC)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as exc:
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "ux_un_horno_en_produccion":
+            raise
         # Segunda linea de defensa: si dos peticiones pasaron la validacion
         # casi al mismo tiempo, el indice unico de PostgreSQL rechaza la
         # segunda. Se convierte en un mensaje claro, no en un error tecnico.
-        db.rollback()
         raise ErrorDeValidacion(
             "Ese horno acaba de quedar ocupado por otra orden. Intenta de nuevo."
         ) from exc
     db.refresh(orden)
 
-    # Aqui empieza a correr el reloj de la produccion: se deja programado el
-    # aviso de "faltan 15 minutos" para el final calculado.
-    try:
-        notificaciones.programar_aviso_fin_produccion(db, orden)
-    except Exception:  # noqa: BLE001
-        logger.exception("No se pudo programar el aviso de fin de %s", orden.numero_orden)
+    # El aviso se guarda en la misma transacción que el cambio de estado.
+    notificaciones.programar_aviso_fin_produccion(db, orden)
 
+    registrar(db, "orden", orden.id, "iniciar", usuario.id if usuario else None, antes, estado_orden(orden))
     return orden
 
 
-def finalizar_orden(db: Session, orden: OrdenProduccion) -> OrdenProduccion:
+@atomica
+def finalizar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None = None) -> OrdenProduccion:
+    orden = bloquear_orden(db, orden.id)
+    antes = estado_orden(orden)
+    if orden.estado == EstadoOrden.FINALIZADA:
+        return orden
     if orden.estado != EstadoOrden.EN_PRODUCCION:
         raise ErrorDeValidacion("Solo se puede finalizar una orden que esté En producción.")
     orden.estado = EstadoOrden.FINALIZADA
     orden.hora_fin = datetime.now(UTC)
-    db.commit()
+    db.flush()
     db.refresh(orden)
+    registrar(db, "orden", orden.id, "finalizar", usuario.id if usuario else None, antes, estado_orden(orden))
     return orden
 
 
-def cancelar_orden(db: Session, orden: OrdenProduccion) -> OrdenProduccion:
+@atomica
+def cancelar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None = None) -> OrdenProduccion:
+    orden = bloquear_orden(db, orden.id)
+    antes = estado_orden(orden)
+    if orden.estado == EstadoOrden.CANCELADA:
+        return orden
     if orden.estado not in EstadoOrden.ACTIVOS:
         raise ErrorDeValidacion("Esta orden ya no se puede cancelar.")
     orden.estado = EstadoOrden.CANCELADA
-    db.commit()
+    db.flush()
     db.refresh(orden)
+    registrar(db, "orden", orden.id, "cancelar", usuario.id if usuario else None, antes, estado_orden(orden))
     return orden
 
 
+@atomica
 def eliminar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario) -> int:
     """
     Borrado suave CON CASCADA: si el administrador elimina una orden es
@@ -413,18 +446,26 @@ def eliminar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario) -> int
 
     Devuelve cuantos registros de horno/saborizado se llevo consigo.
     """
+    orden = bloquear_orden(db, orden.id)
+    antes = estado_orden(orden)
     arrastrados = 0
 
-    registros_horno = db.scalars(
-        select(RegistroHorno).where(
-            RegistroHorno.orden_id == orden.id, RegistroHorno.eliminado == False
+    registros_horno = (
+        db.scalars(
+            select(RegistroHorno).where(RegistroHorno.orden_id == orden.id, RegistroHorno.eliminado == False)
         )
-    ).unique().all()
-    registros_saborizado = db.scalars(
-        select(RegistroSaborizado).where(
-            RegistroSaborizado.orden_id == orden.id, RegistroSaborizado.eliminado == False
+        .unique()
+        .all()
+    )
+    registros_saborizado = (
+        db.scalars(
+            select(RegistroSaborizado).where(
+                RegistroSaborizado.orden_id == orden.id, RegistroSaborizado.eliminado == False
+            )
         )
-    ).unique().all()
+        .unique()
+        .all()
+    )
 
     for registro in registros_horno:
         if not registro.eliminado:
@@ -447,5 +488,6 @@ def eliminar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario) -> int
         orden.estado = EstadoOrden.CANCELADA
 
     marcar_eliminado_por(db, orden, usuario)
-    db.commit()
+    registrar(db, "orden", orden.id, "eliminar", usuario.id, antes, estado_orden(orden))
+    db.flush()
     return arrastrados

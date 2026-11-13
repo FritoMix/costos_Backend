@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
 from app.core.tiempo import combinar_fecha_y_hora
+from app.db.auditoria import registrar, snapshot
+from app.db.transacciones import atomica
 from app.modules.catalogos.models import Sabor
 from app.modules.catalogos.service import detectar_turno_por_hora
 from app.modules.identidad.models import RolCodigo, Usuario
@@ -84,42 +86,53 @@ def _aplicar_datos(
         recepcion.canastillas.append(Canastilla(numero=numero, peso_kg=peso))
 
 
+@atomica
 def crear_recepcion(
     db: Session, orden: OrdenProduccion, datos: RecepcionGuardar, usuario: Usuario
 ) -> RegistroSaborizado:
+    orden = bloquear_orden(db, orden.id)
     if orden.estado != EstadoOrden.EN_PRODUCCION:
-        raise ErrorDeValidacion(
-            "Solo se pueden registrar recepciones para una orden que esté En producción."
-        )
+        raise ErrorDeValidacion("Solo se pueden registrar recepciones para una orden que esté En producción.")
 
-    bloquear_orden(db, orden.id)
     recepcion = RegistroSaborizado(orden_id=orden.id, usuario_id=usuario.id)
     recepcion.orden = orden
     _aplicar_datos(db, recepcion, orden, datos)
     db.add(recepcion)
-    db.commit()
+    db.flush()
     db.refresh(recepcion)
+    registrar(db, "saborizado", recepcion.id, "crear", usuario.id, None, snapshot(recepcion))
     return recepcion
 
 
+@atomica
 def editar_recepcion(
     db: Session, recepcion: RegistroSaborizado, datos: RecepcionGuardar, usuario: Usuario
 ) -> RegistroSaborizado:
+    bloquear_orden(db, recepcion.orden_id)
+    db.refresh(recepcion)
+    antes = snapshot(recepcion)
+    if recepcion.eliminado:
+        raise RecursoNoEncontrado("Ese registro ya fue eliminado.")
     if recepcion.orden.estado != EstadoOrden.EN_PRODUCCION:
-        raise ErrorDeValidacion(
-            "Solo se puede editar una recepción mientras la orden esté En producción."
-        )
+        raise ErrorDeValidacion("Solo se puede editar una recepción mientras la orden esté En producción.")
     if usuario.rol.codigo != RolCodigo.ADMIN and recepcion.usuario_id != usuario.id:
         raise ErrorDeValidacion("Solo puedes corregir las recepciones que tú mismo guardaste.")
 
-    bloquear_orden(db, recepcion.orden_id)
     _aplicar_datos(db, recepcion, recepcion.orden, datos)
-    db.commit()
+    db.flush()
     db.refresh(recepcion)
+    registrar(db, "saborizado", recepcion.id, "editar", usuario.id, antes, snapshot(recepcion))
     return recepcion
 
 
+@atomica
 def eliminar_recepcion(db: Session, recepcion: RegistroSaborizado, usuario: Usuario) -> None:
     """Borrado suave (solo Administrador; ver el router)."""
+    orden = bloquear_orden(db, recepcion.orden_id)
+    db.refresh(recepcion)
+    antes = snapshot(recepcion)
+    if orden.estado != EstadoOrden.EN_PRODUCCION:
+        raise ErrorDeValidacion("No se pueden borrar registros de una orden cerrada.")
     marcar_eliminado_por(db, recepcion, usuario)
-    db.commit()
+    db.flush()
+    registrar(db, "saborizado", recepcion.id, "eliminar", usuario.id, antes, snapshot(recepcion))

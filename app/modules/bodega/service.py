@@ -14,10 +14,11 @@ cuando la referencia tiene rendimiento configurado.
 
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.db.transacciones import atomica
 from app.modules.bodega.models import ReferenciaPapa
 from app.modules.bodega.schemas import (
     ProyeccionProduccionSalida,
@@ -51,9 +52,7 @@ def obtener(db: Session, referencia_id: int) -> ReferenciaPapa:
 
 
 def _nombre_libre(db: Session, nombre: str, excluir_id: int | None) -> None:
-    consulta = select(ReferenciaPapa.id).where(
-        func.lower(ReferenciaPapa.nombre) == nombre.lower()
-    )
+    consulta = select(ReferenciaPapa.id).where(func.lower(ReferenciaPapa.nombre) == nombre.lower())
     if excluir_id is not None:
         consulta = consulta.where(ReferenciaPapa.id != excluir_id)
     if db.scalar(consulta) is not None:
@@ -79,17 +78,15 @@ def _validar_parametros(datos: ReferenciaPapaGuardar) -> None:
     """Segunda barrera, ademas de Pydantic, para llamadas internas."""
     rendimiento = datos.rendimiento_fritura_pct
     if rendimiento is not None and (rendimiento <= 0 or rendimiento > CIEN):
-        raise ErrorDeValidacion(
-            "El rendimiento de fritura debe ser mayor a 0 % y menor o igual a 100 %."
-        )
+        raise ErrorDeValidacion("El rendimiento de fritura debe ser mayor a 0 % y menor o igual a 100 %.")
     participacion = datos.porcentaje_produccion_pct
     if participacion is not None and (participacion < 0 or participacion > CIEN):
-        raise ErrorDeValidacion(
-            "La participación de producción debe estar entre 0 % y 100 %."
-        )
+        raise ErrorDeValidacion("La participación de producción debe estar entre 0 % y 100 %.")
 
 
+@atomica
 def crear(db: Session, datos: ReferenciaPapaGuardar) -> ReferenciaPapa:
+    db.execute(text("SELECT pg_advisory_xact_lock(741902632)"))
     nombre = _texto_limpio(datos.nombre, "El nombre de la referencia")
     _validar_parametros(datos)
     _nombre_libre(db, nombre, None)
@@ -102,14 +99,14 @@ def crear(db: Session, datos: ReferenciaPapaGuardar) -> ReferenciaPapa:
         activo=datos.activo,
     )
     db.add(referencia)
-    db.commit()
+    db.flush()
     db.refresh(referencia)
     return referencia
 
 
-def actualizar(
-    db: Session, referencia_id: int, datos: ReferenciaPapaGuardar
-) -> ReferenciaPapa:
+@atomica
+def actualizar(db: Session, referencia_id: int, datos: ReferenciaPapaGuardar) -> ReferenciaPapa:
+    db.execute(text("SELECT pg_advisory_xact_lock(741902632)"))
     referencia = obtener(db, referencia_id)
     nombre = _texto_limpio(datos.nombre, "El nombre de la referencia")
     _validar_parametros(datos)
@@ -120,12 +117,14 @@ def actualizar(
     referencia.rendimiento_fritura_pct = datos.rendimiento_fritura_pct
     referencia.porcentaje_produccion_pct = datos.porcentaje_produccion_pct
     referencia.activo = datos.activo
-    db.commit()
+    db.flush()
     db.refresh(referencia)
     return referencia
 
 
+@atomica
 def eliminar(db: Session, referencia_id: int) -> None:
+    db.execute(text("SELECT pg_advisory_xact_lock(741902632)"))
     from app.modules.produccion.models import (
         FormulaPapaReferencia,
         OrdenReferencia,
@@ -135,9 +134,7 @@ def eliminar(db: Session, referencia_id: int) -> None:
 
     referencia = obtener(db, referencia_id)
     usada = db.scalar(
-        select(RegistroHorno.id)
-        .where(RegistroHorno.referencia_papa_id == referencia_id)
-        .limit(1)
+        select(RegistroHorno.id).where(RegistroHorno.referencia_papa_id == referencia_id).limit(1)
     )
     if usada is None:
         usada = db.scalar(
@@ -147,9 +144,7 @@ def eliminar(db: Session, referencia_id: int) -> None:
         )
     if usada is None:
         usada = db.scalar(
-            select(OrdenReferencia.id)
-            .where(OrdenReferencia.referencia_papa_id == referencia_id)
-            .limit(1)
+            select(OrdenReferencia.id).where(OrdenReferencia.referencia_papa_id == referencia_id).limit(1)
         )
     if usada is None:
         usada = db.scalar(
@@ -163,20 +158,18 @@ def eliminar(db: Session, referencia_id: int) -> None:
             "una tanda de horno. Puedes desactivarla en su lugar."
         )
     db.delete(referencia)
-    db.commit()
+    db.flush()
 
 
 def capacidad_entera(horno: Horno) -> int:
     if horno.capacidad_bultos_hora is None:
         raise ErrorDeValidacion(
-            f'El {horno.nombre} no tiene configurada su capacidad de bultos por hora. '
+            f"El {horno.nombre} no tiene configurada su capacidad de bultos por hora. "
             "Configúrala en Hornos antes de proyectar la producción."
         )
     capacidad = horno.capacidad_bultos_hora
     if capacidad <= 0 or capacidad != capacidad.to_integral_value():
-        raise ErrorDeValidacion(
-            "La capacidad del horno debe ser un número entero de bultos por hora."
-        )
+        raise ErrorDeValidacion("La capacidad del horno debe ser un número entero de bultos por hora.")
     return int(capacidad)
 
 
@@ -214,10 +207,7 @@ def _participaciones_de_proyeccion(
             pass
 
     partes = CIEN / Decimal(len(referencias))
-    return [
-        Participacion(referencia_id=referencia.id, porcentaje=partes)
-        for referencia in referencias
-    ]
+    return [Participacion(referencia_id=referencia.id, porcentaje=partes) for referencia in referencias]
 
 
 def proyectar(db: Session, horno_id: int, horas: int = 1) -> ProyeccionProduccionSalida:
@@ -233,7 +223,7 @@ def proyectar(db: Session, horno_id: int, horas: int = 1) -> ProyeccionProduccio
         raise RecursoNoEncontrado("Ese horno no existe.")
     if not horno.activo:
         raise ErrorDeValidacion(
-            f'El {horno.nombre} está inactivo. Actívalo o elige otro horno para proyectar.'
+            f"El {horno.nombre} está inactivo. Actívalo o elige otro horno para proyectar."
         )
     if horas < 1:
         raise ErrorDeValidacion("El número de horas debe ser mínimo 1.")
@@ -241,9 +231,7 @@ def proyectar(db: Session, horno_id: int, horas: int = 1) -> ProyeccionProduccio
     capacidad_hora = capacidad_entera(horno)
     referencias = listar(db, solo_activas=True)
     if not referencias:
-        raise ErrorDeValidacion(
-            "No hay referencias de papa activas. Bodega debe registrar al menos una."
-        )
+        raise ErrorDeValidacion("No hay referencias de papa activas. Bodega debe registrar al menos una.")
 
     for referencia in referencias:
         validar_referencia_completa(referencia)
@@ -252,8 +240,7 @@ def proyectar(db: Session, horno_id: int, horas: int = 1) -> ProyeccionProduccio
     capacidad_total = capacidad_hora * horas
     bultos_por_referencia = distribuir_bultos(capacidad_total, participaciones)
     porcentaje_por_referencia = {
-        participacion.referencia_id: participacion.porcentaje
-        for participacion in participaciones
+        participacion.referencia_id: participacion.porcentaje for participacion in participaciones
     }
 
     filas: list[ProyeccionReferenciaSalida] = []

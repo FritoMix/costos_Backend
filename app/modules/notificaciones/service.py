@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errores import RecursoNoEncontrado
+from app.db.transacciones import atomica
 from app.modules.identidad.models import Rol, RolCodigo, Usuario
 from app.modules.notificaciones.models import Notificacion, TipoNotificacion
 
@@ -91,8 +92,15 @@ def _crear_para(
                 db.add(notificacion)
                 db.flush()
             creados += 1
-        except IntegrityError:
-            # El aviso ya existia (misma persona, orden y tipo).
+        except IntegrityError as exc:
+            # No esconder violaciones de FK, NOT NULL o CHECK como duplicados.
+            codigo = getattr(exc.orig, "sqlstate", None)
+            sqlite_unique = getattr(exc.orig, "sqlite_errorname", "") == "SQLITE_CONSTRAINT_UNIQUE"
+            restriccion = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if not sqlite_unique and not (
+                codigo == "23505" and restriccion == "ux_notificacion_unica_por_orden"
+            ):
+                raise
             continue
     return creados
 
@@ -146,6 +154,7 @@ def _crear_o_actualizar(
     return cambiados + creados
 
 
+@atomica
 def avisar_orden_para_bodega(db: Session, orden) -> None:
     """
     Aviso a Bodega: hay una orden nueva pendiente de formula.
@@ -173,9 +182,10 @@ def avisar_orden_para_bodega(db: Session, orden) -> None:
         ),
         orden_id=orden.id,
     )
-    db.commit()
+    db.flush()
 
 
+@atomica
 def avisar_formula_lista(db: Session, orden) -> None:
     """
     Aviso a horno y al supervisor: la formula quedo lista para producir.
@@ -201,9 +211,10 @@ def avisar_formula_lista(db: Session, orden) -> None:
         ),
         orden_id=orden.id,
     )
-    db.commit()
+    db.flush()
 
 
+@atomica
 def avisar_orden_creada(db: Session, orden) -> None:
     """Aviso inmediato a los operarios: hay una orden nueva que trabajar."""
     operarios = _destinatarios_operarios(db)
@@ -224,9 +235,10 @@ def avisar_orden_creada(db: Session, orden) -> None:
         ),
         orden_id=orden.id,
     )
-    db.commit()
+    db.flush()
 
 
+@atomica
 def programar_aviso_fin_produccion(db: Session, orden) -> None:
     """
     Deja programado el aviso de "faltan 15 minutos".
@@ -262,7 +274,7 @@ def programar_aviso_fin_produccion(db: Session, orden) -> None:
         orden_id=orden.id,
         fecha_programada=momento_aviso,
     )
-    db.commit()
+    db.flush()
 
 
 # --- Consulta y lectura ----------------------------------------------------
@@ -302,15 +314,17 @@ def historial(db: Session, usuario: Usuario) -> list[Notificacion]:
     )
 
 
+@atomica
 def marcar_leida(db: Session, notificacion_id: int, usuario: Usuario) -> None:
     notificacion = db.get(Notificacion, notificacion_id)
     if notificacion is None or notificacion.usuario_id != usuario.id:
         raise RecursoNoEncontrado("Ese aviso no existe.")
     notificacion.leida = True
-    db.commit()
+    db.flush()
 
 
+@atomica
 def marcar_todas_leidas(db: Session, usuario: Usuario) -> None:
     for notificacion in pendientes(db, usuario):
         notificacion.leida = True
-    db.commit()
+    db.flush()

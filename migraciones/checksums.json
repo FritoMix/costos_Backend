@@ -1,0 +1,18 @@
+{
+  "V10__formula_orden_y_tanda_multi_referencia.sql": "0d293f1625c9caac3efdfbe2af44f0cb3c769c9a421bd52e1cd78bdf5a4247da",
+  "V11__notificaciones_formula.sql": "0ff7ddfb05db4c0b4efbfa46a7882d738bfcd0a13683704dd2576a9a0b6aad9d",
+  "V12__formulas_papa_por_producto.sql": "a3203e5eade283992b5caf53f034edeed6609ae975551cbd969b421bee84d21a",
+  "V13__rendimiento_opcional_en_formula.sql": "1b14759bf2d1456e9293dded0342f80fc663504e721dd8c1e184eb949f0dbe51",
+  "V14__sesiones_e_intentos_login.sql": "a8d0c8d40eac43fe4ab9ee6605f91798a5a43b3ad8208f2898cd6f99248b9ae5",
+  "V15__idempotencia_y_auditoria.sql": "f2cd5fb4d58ce7f38998eda0673e81c4fcf21db3d413934bdea9ae846954bbb4",
+  "V16__restricciones_cantidades.sql": "8299daf30c5fcef8b92f5e6da8fa9a090d83bf161d014d509f0e907f963f29b0",
+  "V1__esquema_inicial.sql": "d4b1bfa74ad69b9b7bb49106637efe8208db5f7db23a3e3c9e6c75763748dbdb",
+  "V2__datos_iniciales.sql": "1f7136196e2063394e121962a7800dcce4db4d79b3dc08d28691a3b909930c65",
+  "V3__horas_de_produccion_en_orden.sql": "50bcf027c629ef23cbd4beaec145587cd1e4bbb4fdc4f6f7a8984b1df43da75b",
+  "V4__horas_produccion_enteras.sql": "a1007ff542160cac8dec5c683fc403772b0ce77d31d9dde46f4e01786575f149",
+  "V5__notificaciones.sql": "b900977331421ffed24cc665a52e37d27da198919b266a7333e5c8ce7e1912cc",
+  "V6__liberar_hornos_de_ordenes_borradas.sql": "e7d150cf8175d6d1a1c2dff32a0cfcdc62a0222a0e7b894cf1271fc14c12864d",
+  "V7__version_de_sesion.sql": "72eb819c733c1d6947aa560348f94be061332d9fe7eb66d0fc959f9775837c40",
+  "V8__bodega_referencias_papa.sql": "15c20e08cd97491c3554d4839de2f46e7111fd6d79b8d242224e6f803b4eede3",
+  "V9__parametros_productivos_papa_horno.sql": "6ec39d403730038408917cc77e9765170be87a1e31e7b3e5d52d085c30c8352a"
+}

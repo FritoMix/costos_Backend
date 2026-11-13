@@ -21,6 +21,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.db.auditoria import registrar
+from app.db.transacciones import atomica
 from app.modules.bodega import service as servicio_bodega
 from app.modules.bodega.models import ReferenciaPapa
 from app.modules.catalogos.models import Horno
@@ -54,6 +56,7 @@ from app.modules.produccion.schemas import (
     OrdenBodegaSalida,
     OrdenSalida,
 )
+from app.modules.produccion.servicios.registros import bloquear_orden
 from app.modules.produccion.servicios.totales import producido_por_referencia
 
 logger = logging.getLogger("datacontrol")
@@ -83,9 +86,7 @@ def validar_referencia_formula(referencia: ReferenciaPapa) -> None:
     rendimiento, los kg fritos quedan sin estimar (se muestran como "—").
     """
     if not referencia.activo:
-        raise ErrorDeValidacion(
-            f'La referencia "{referencia.nombre}" está inactiva. Actívala o elige otra.'
-        )
+        raise ErrorDeValidacion(f'La referencia "{referencia.nombre}" está inactiva. Actívala o elige otra.')
     if referencia.peso_promedio_bulto_kg is None or referencia.peso_promedio_bulto_kg <= 0:
         raise ErrorDeValidacion(
             f'La referencia "{referencia.nombre}" está incompleta: configura el '
@@ -108,9 +109,7 @@ def resolver_mezcla(
 
     encontradas = {
         referencia.id: referencia
-        for referencia in db.scalars(
-            select(ReferenciaPapa).where(ReferenciaPapa.id.in_(ids))
-        ).all()
+        for referencia in db.scalars(select(ReferenciaPapa).where(ReferenciaPapa.id.in_(ids))).all()
     }
     resultado: list[tuple[ReferenciaPapa, int]] = []
     for fila in filas:
@@ -122,9 +121,7 @@ def resolver_mezcla(
     return resultado
 
 
-def _referencias_de_formula(
-    db: Session, datos: FormulaGuardar
-) -> list[tuple[ReferenciaPapa, int]]:
+def _referencias_de_formula(db: Session, datos: FormulaGuardar) -> list[tuple[ReferenciaPapa, int]]:
     return resolver_mezcla(db, datos.referencias)
 
 
@@ -216,7 +213,7 @@ def validar_mezcla_en_horno(
     """
     if horno.capacidad_bultos_hora is None:
         raise ErrorDeValidacion(
-            f'El {horno.nombre} no tiene configurada su capacidad de bultos por hora. '
+            f"El {horno.nombre} no tiene configurada su capacidad de bultos por hora. "
             "Configúrala en Hornos antes de guardar la fórmula."
         )
     if not horas_produccion or horas_produccion < 1:
@@ -273,9 +270,7 @@ def filas_de_mezcla(
                 referencia_papa_id=referencia.id,
                 bultos_por_tanda=bultos,
                 bultos_planificados=bultos * horas,
-                porcentaje_produccion_pct=calcular_porcentaje_desde_bultos(
-                    bultos, total_por_tanda
-                ),
+                porcentaje_produccion_pct=calcular_porcentaje_desde_bultos(bultos, total_por_tanda),
                 peso_promedio_bulto_kg=referencia.peso_promedio_bulto_kg,
                 rendimiento_fritura_pct=rendimiento,
                 kg_crudos_por_tanda=kg_crudos,
@@ -307,9 +302,7 @@ def obtener(db: Session, orden: OrdenProduccion) -> FormulaSalida:
     )
     avance = None
     if total_planificados > 0:
-        avance = (total_producidos / Decimal(total_planificados) * CIEN).quantize(
-            Decimal("0.01")
-        )
+        avance = (total_producidos / Decimal(total_planificados) * CIEN).quantize(Decimal("0.01"))
 
     return FormulaSalida(
         orden_id=orden.id,
@@ -335,20 +328,23 @@ def obtener(db: Session, orden: OrdenProduccion) -> FormulaSalida:
     )
 
 
+@atomica
 def guardar(
     db: Session,
     orden: OrdenProduccion,
     datos: FormulaGuardar,
     usuario: Usuario,
 ) -> FormulaSalida:
+    orden = bloquear_orden(db, orden.id)
+    from sqlalchemy import text
+
+    db.execute(text("SELECT pg_advisory_xact_lock(741902632)"))
     if not orden.formula_obligatoria:
         raise ErrorDeValidacion(
             "Esta orden es histórica y no admite fórmula: se produce con el registro anterior."
         )
     if _tandas_registradas(db, orden.id) > 0:
-        raise ErrorDeValidacion(
-            "La fórmula ya está congelada porque la orden tiene tandas registradas."
-        )
+        raise ErrorDeValidacion("La fórmula ya está congelada porque la orden tiene tandas registradas.")
     if orden.estado != EstadoOrden.PENDIENTE:
         raise ErrorDeValidacion(
             "La fórmula solo se puede definir o corregir mientras la orden esté Pendiente."
@@ -361,6 +357,7 @@ def guardar(
         cantidad_programada=orden.cantidad_programada,
     )
 
+    anterior = obtener(db, orden).model_dump(mode="json")
     # Se reemplaza la formula completa: una sola formula vigente por orden.
     orden.referencias.clear()
     db.flush()
@@ -369,15 +366,14 @@ def guardar(
     orden.formula_notas = (datos.notas or "").strip() or None
     orden.formula_actualizada_por_id = usuario.id
     orden.formula_fecha_actualizacion = datetime.now(UTC)
-    db.commit()
+    db.flush()
     db.refresh(orden)
 
-    try:
-        notificaciones.avisar_formula_lista(db, orden)
-    except Exception:  # noqa: BLE001 - la formula ya quedo guardada
-        logger.exception("No se pudo notificar la fórmula de %s", orden.numero_orden)
+    notificaciones.avisar_formula_lista(db, orden)
 
-    return obtener(db, orden)
+    nueva = obtener(db, orden)
+    registrar(db, "formula_orden", orden.id, "guardar", usuario.id, anterior, nueva.model_dump(mode="json"))
+    return nueva
 
 
 def recalcular_totales(db: Session, orden: OrdenProduccion) -> None:
@@ -389,9 +385,7 @@ def recalcular_totales(db: Session, orden: OrdenProduccion) -> None:
         raise ErrorDeValidacion("La orden debe tener al menos una hora programada.")
     for fila in orden.referencias:
         fila.bultos_planificados = fila.bultos_por_tanda * horas
-        fila.kg_crudos_planificados = (
-            fila.kg_crudos_por_tanda * horas
-        ).quantize(CENTAVOS)
+        fila.kg_crudos_planificados = (fila.kg_crudos_por_tanda * horas).quantize(CENTAVOS)
         fila.kg_fritos_estimados = (
             (fila.kg_fritos_por_tanda * horas).quantize(CENTAVOS)
             if fila.kg_fritos_por_tanda is not None
@@ -417,7 +411,7 @@ def validar_cambio_orden(
         return
     if horno.capacidad_bultos_hora is None:
         raise ErrorDeValidacion(
-            f'El {horno.nombre} no tiene configurada su capacidad de bultos por hora; '
+            f"El {horno.nombre} no tiene configurada su capacidad de bultos por hora; "
             "Bodega no puede ajustar la fórmula."
         )
     capacidad = _capacidad(horno)
@@ -450,15 +444,11 @@ def validar_cambio_orden(
 def _referencias_para_sugerencia(db: Session) -> list[ReferenciaPapa]:
     referencias = list(
         db.scalars(
-            select(ReferenciaPapa)
-            .where(ReferenciaPapa.activo.is_(True))
-            .order_by(ReferenciaPapa.id)
+            select(ReferenciaPapa).where(ReferenciaPapa.activo.is_(True)).order_by(ReferenciaPapa.id)
         ).all()
     )
     if not referencias:
-        raise ErrorDeValidacion(
-            "No hay referencias de papa activas. Bodega debe registrar al menos una."
-        )
+        raise ErrorDeValidacion("No hay referencias de papa activas. Bodega debe registrar al menos una.")
     for referencia in referencias:
         validar_referencia_formula(referencia)
     return referencias
@@ -499,13 +489,8 @@ def _mezcla_para_proyeccion(
                 )
             ).all()
         }
-        return [
-            (referencias[fila.referencia_id], fila.bultos_por_tanda)
-            for fila in sugerencia
-        ], "sugerencia"
-    return _referencias_de_formula(
-        db, FormulaGuardar(referencias=datos.referencias, notas=None)
-    ), "manual"
+        return [(referencias[fila.referencia_id], fila.bultos_por_tanda) for fila in sugerencia], "sugerencia"
+    return _referencias_de_formula(db, FormulaGuardar(referencias=datos.referencias, notas=None)), "manual"
 
 
 def proyectar(
@@ -517,7 +502,7 @@ def proyectar(
         raise ErrorDeValidacion("La orden debe tener al menos una hora programada.")
     if orden.horno.capacidad_bultos_hora is None:
         raise ErrorDeValidacion(
-            f'El {orden.horno.nombre} no tiene configurada su capacidad de bultos por hora. '
+            f"El {orden.horno.nombre} no tiene configurada su capacidad de bultos por hora. "
             "Configúrala en Hornos antes de proyectar la fórmula."
         )
     mezcla, origen = _mezcla_para_proyeccion(db, orden, datos)
@@ -544,9 +529,7 @@ def proyectar(
             kg_fritos_planificados = None
         else:
             kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
-            kg_fritos_planificados = (kg_fritos * orden.horas_produccion).quantize(
-                CENTAVOS
-            )
+            kg_fritos_planificados = (kg_fritos * orden.horas_produccion).quantize(CENTAVOS)
             total_fritos += kg_fritos_planificados
         total_crudos += (kg_crudos * orden.horas_produccion).quantize(CENTAVOS)
         filas.append(
@@ -555,16 +538,12 @@ def proyectar(
                 nombre=referencia.nombre,
                 tipo=referencia.tipo,
                 bultos_por_tanda=bultos,
-                porcentaje_produccion_pct=calcular_porcentaje_desde_bultos(
-                    bultos, total_por_tanda
-                ),
+                porcentaje_produccion_pct=calcular_porcentaje_desde_bultos(bultos, total_por_tanda),
                 peso_promedio_bulto_kg=referencia.peso_promedio_bulto_kg,
                 rendimiento_fritura_pct=rendimiento,
                 kg_crudos_por_tanda=kg_crudos,
                 kg_fritos_por_tanda=kg_fritos,
-                kg_crudos_planificados=(kg_crudos * orden.horas_produccion).quantize(
-                    CENTAVOS
-                ),
+                kg_crudos_planificados=(kg_crudos * orden.horas_produccion).quantize(CENTAVOS),
                 kg_fritos_estimados=kg_fritos_planificados,
             )
         )
@@ -574,11 +553,7 @@ def proyectar(
     if total_por_tanda > 0:
         kg_promedio = (
             sum(
-                (
-                    fila.kg_fritos_por_tanda
-                    for fila in filas
-                    if fila.kg_fritos_por_tanda is not None
-                ),
+                (fila.kg_fritos_por_tanda for fila in filas if fila.kg_fritos_por_tanda is not None),
                 Decimal("0"),
             )
             / Decimal(total_por_tanda)
@@ -590,21 +565,15 @@ def proyectar(
         diferencia = (total_fritos_estimado - orden.cantidad_programada).quantize(CENTAVOS)
         diferencia_pct = Decimal("0")
         if orden.cantidad_programada > 0:
-            diferencia_pct = (
-                diferencia / orden.cantidad_programada * CIEN
-            ).quantize(CUATRO_DECIMALES)
+            diferencia_pct = (diferencia / orden.cantidad_programada * CIEN).quantize(CUATRO_DECIMALES)
 
     kg_por_bulto = [
-        kg_fritos_por_bulto(
-            referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct
-        )
+        kg_fritos_por_bulto(referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct)
         for referencia, _ in mezcla
         if referencia.rendimiento_fritura_pct is not None
     ]
     if kg_por_bulto:
-        capacidad_maxima_kg = (
-            Decimal(capacidad * orden.horas_produccion) * max(kg_por_bulto)
-        )
+        capacidad_maxima_kg = Decimal(capacidad * orden.horas_produccion) * max(kg_por_bulto)
         factible = capacidad_maxima_kg >= orden.cantidad_programada
     else:
         # Sin rendimiento no hay estimacion de kg: no se puede bloquear por
@@ -663,18 +632,14 @@ def _salida_bodega(
     if planificados is None and tiene_formula:
         planificados = sum(fila.bultos_planificados for fila in orden.referencias)
     if producidos is None and tiene_formula:
-        producidos = sum(
-            producido_por_referencia(db, orden.id).values(), Decimal("0")
-        )
+        producidos = sum(producido_por_referencia(db, orden.id).values(), Decimal("0"))
     if tandas is None:
         tandas = _tandas_registradas(db, orden.id)
     total_plan = int(planificados) if planificados is not None else None
     total_producido = producidos if tiene_formula else None
     avance = None
     if total_plan and total_producido is not None:
-        avance = (total_producido / Decimal(total_plan) * CIEN).quantize(
-            Decimal("0.01")
-        )
+        avance = (total_producido / Decimal(total_plan) * CIEN).quantize(Decimal("0.01"))
     base = OrdenSalida.model_validate(orden).model_dump()
     return OrdenBodegaSalida(
         **base,
@@ -712,13 +677,9 @@ def listar_ordenes_bodega(
         consulta = consulta.where(
             OrdenProduccion.estado == EstadoOrden.PENDIENTE,
             OrdenProduccion.formula_obligatoria.is_(True),
-            ~select(OrdenReferencia.id)
-            .where(OrdenReferencia.orden_id == OrdenProduccion.id)
-            .exists(),
+            ~select(OrdenReferencia.id).where(OrdenReferencia.orden_id == OrdenProduccion.id).exists(),
         )
-    consulta = consulta.order_by(
-        OrdenProduccion.fecha.desc(), OrdenProduccion.id.desc()
-    ).limit(500)
+    consulta = consulta.order_by(OrdenProduccion.fecha.desc(), OrdenProduccion.id.desc()).limit(500)
     ordenes = list(db.scalars(consulta).unique().all())
     if not ordenes:
         return []
