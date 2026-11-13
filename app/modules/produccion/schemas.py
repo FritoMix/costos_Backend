@@ -71,6 +71,13 @@ class OrdenSalida(BaseModel):
     categoria: Referencia
 
 
+class OrdenesPagina(BaseModel):
+    items: list[OrdenSalida]
+    total: int
+    pagina: int
+    tamano: int
+
+
 class OrdenGuardar(BaseModel):
     turno_id: int
     horno_id: int

@@ -18,7 +18,7 @@ projects:
             region: oregon
             dockerContext: .
             dockerfilePath: ./Dockerfile
-            healthCheckPath: /api/v1/salud
+            healthCheckPath: /api/v1/listo
             autoDeployTrigger: commit
             envVars:
               # Entorno real: desactiva /docs y activa la cookie Secure.

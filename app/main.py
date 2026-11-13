@@ -9,6 +9,7 @@ app/modules/<modulo>/service.py.
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
@@ -173,14 +174,25 @@ async def proteger_autenticacion(request, call_next):
 
 @app.middleware("http")
 async def middleware_trazabilidad(request, call_next):
-    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    recibido = request.headers.get("X-Request-ID", "")
+    request_id = recibido if re.fullmatch(r"[A-Za-z0-9_-]{8,64}", recibido) else uuid.uuid4().hex
+    request.state.request_id = request_id
     inicio = time.perf_counter()
-    respuesta = await call_next(request)
+    try:
+        respuesta = await call_next(request)
+    except Exception as exc:
+        # Resolver aquí evita que el servidor vuelva a imprimir la excepción
+        # con parámetros SQL, tokens u otros valores sensibles.
+        manejador = request.app.exception_handlers[Exception]
+        respuesta = await manejador(request, exc)
     duracion_ms = (time.perf_counter() - inicio) * 1000
     respuesta.headers["X-Request-ID"] = request_id
 
     # No ensuciar el log con las revisiones de salud de Docker
-    if not request.url.path.endswith("/salud"):
+    if (
+        request.url.path not in {"/api/v1/salud", "/api/v1/vivo", "/api/v1/listo"}
+        or respuesta.status_code >= 400
+    ):
         logger.info(
             "[%s] %s %s -> %d (%.1f ms)",
             request_id,

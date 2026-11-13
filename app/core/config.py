@@ -37,9 +37,14 @@ class Settings(BaseSettings):
     # real, con varios operarios metiendo datos a la vez, se sube el tamaño
     # con DATABASE_POOL_SIZE / DB_MAX_OVERFLOW. El maximo real lo pone
     # PostgreSQL (default: 100 conexiones).
-    db_pool_size: int = 10
-    db_max_overflow: int = 20
-    db_pool_recycle_segundos: int = 1800
+    db_pool_size: int = Field(default=5, ge=1, le=100)
+    db_max_overflow: int = Field(default=5, ge=0, le=100)
+    db_pool_recycle_segundos: int = Field(default=1800, ge=60)
+    db_pool_timeout_segundos: int = Field(default=10, ge=1, le=120)
+    db_connect_timeout_segundos: int = Field(default=5, ge=1, le=60)
+    db_statement_timeout_ms: int = Field(default=30_000, ge=100, le=600_000)
+    db_lock_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
+    db_idle_transaction_timeout_ms: int = Field(default=60_000, ge=1000, le=600_000)
 
     # Aplicar las migraciones al arrancar la API. Imprescindible cuando no
     # hay contenedor de Flyway (despliegues en la nube). En local es

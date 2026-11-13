@@ -15,7 +15,7 @@ permissions:
 jobs:
   pruebas:
     name: Pruebas y lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -51,8 +51,16 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements-dev.txt
 
+      - name: Clientes de respaldo y cifrado
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16 age
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/16/bin/pg_dump --version
+          age --version
+
       - name: Lint (ruff)
-        run: ruff check app tests
+        run: ruff check app tests scripts/backup_postgres.py
 
       - name: Escaneo de dependencias (pip-audit)
         run: pip-audit -r requirements.txt --strict

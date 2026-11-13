@@ -9,7 +9,9 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -71,3 +73,22 @@ def salud(db: Annotated[Session, Depends(get_db)]) -> dict:
         "tiempo_activo_segundos": int(time.monotonic() - _inicio_proceso),
         "pool": info_pool,
     }
+
+
+@api_router.get("/vivo", tags=["Estado"])
+def vivo() -> dict:
+    """El proceso responde, sin consumir conexiones PostgreSQL."""
+    return {"estado": "ok"}
+
+
+@api_router.get("/listo", tags=["Estado"])
+def listo():
+    """Admite tráfico únicamente si puede obtener y usar una conexión."""
+    try:
+        with engine.connect() as conexion:
+            conexion.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(
+            status_code=503, content={"estado": "no_disponible"}, headers={"Cache-Control": "no-store"}
+        )
+    return JSONResponse(content={"estado": "ok"}, headers={"Cache-Control": "no-store"})
