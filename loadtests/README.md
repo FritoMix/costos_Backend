@@ -1,33 +1,26 @@
-# Prueba de carga
+# Mediciones de lectura en un entorno desechable
 
-Mide el comportamiento con 20-30 operarios consultando datos. Usa el stack
-E2E (base desechable) para no tocar producción.
+`lectura.js` rechaza URLs externas, HTTPS y cualquier ejecución sin
+`LOADTEST_DISPOSABLE=1`. Solo admite localhost, 127.0.0.1 o el servicio Docker
+`front`. No redirigir estos nombres mediante túneles o proxies a producción.
+Las credenciales corresponden únicamente a usuarios ficticios del stack E2E.
+No se incluye el cuerpo de errores de login en los logs.
 
-```bash
-# 1) Stack de producción local, con un límite alto para aislar la app
-cd frontdata
-E2E_ADMIN_PASS=e2e-admin-pass docker compose -f e2e/docker-compose.e2e.yml up -d --build --wait
-
-# 2) Prueba: 25 usuarios virtuales durante 2 minutos
-docker run --rm --network datacontrol-e2e_default \
-  -v "$PWD/../backdata/loadtests:/scripts:ro" \
-  -e BASE_URL=http://front \
-  -e ADMIN_PASS=e2e-admin-pass \
-  -e VUS=25 -e DURATION=2m \
-  grafana/k6:2.3.0 run /scripts/lectura.js
-
-# 3) Limpiar
-docker compose -f e2e/docker-compose.e2e.yml down -v
+```sh
+LOADTEST_DISPOSABLE=1 BASE_URL=http://127.0.0.1:4200 \
+ADMIN_PASS=clave-ficticia VUS=10 DURATION=30s \
+k6 run --summary-export=lectura.json loadtests/lectura.js
 ```
 
-El script hace un solo login y reutiliza la cookie para todas las lecturas.
-El límite de la API se configura con `E2E_RATE_LIMIT_MINUTE` (default
-`1200/minute`) para que la prueba mida la aplicación, no el rate limiter.
+El CI del frontend ejecuta esta medición después de Playwright en su stack
+Docker efímero. Publica `loadtest-results/lectura.json`, con latencias,
+solicitudes, errores y checks. Umbrales: errores <1%, p95 <500 ms y p99 <1 s.
+Cada usuario espera entre 2 y 4 segundos entre lecturas. Una sesión compartida
+sirve para medir lecturas; esta prueba no certifica concurrencia de escrituras
+ni capacidad máxima, y usa un conjunto pequeño de datos ficticios.
 
-## Interpretación
-
-- `http_req_duration p(95)` debe quedar por debajo de 500 ms.
-- `http_req_failed` debe ser menor al 1 %.
-- Un `429` significa que se alcanzó el límite por IP; en producción cada
-  operario tiene su propia IP (Nginx envía `X-Real-IP`). Si todos salen por
-  un NAT, subir `RATE_LIMIT_MINUTE` en `.env` y reiniciar la API.
+Comparar métricas usando el mismo número de usuarios, duración, datos e
+infraestructura. La variabilidad de los runners requiere repetir mediciones
+antes de atribuir una mejora al código. Falta medir consultas con datos de
+volumen representativo y EXPLAIN (ANALYZE, BUFFERS) en preproducción. No se
+han modificado índices sin esas evidencias.

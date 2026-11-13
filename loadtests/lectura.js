@@ -16,7 +16,13 @@
 import http from 'k6/http';
 import { check, fail, sleep } from 'k6';
 
-const BASE = __ENV.BASE_URL || 'http://127.0.0.1:4200';
+const BASE = (__ENV.BASE_URL || 'http://127.0.0.1:4200').replace(/\/$/, '');
+// Entornos desechables únicamente. No existe un interruptor para producción.
+if (!/^http:\/\/(127\.0\.0\.1|localhost|front)(:\d+)?$/.test(BASE) ||
+    __ENV.LOADTEST_DISPOSABLE !== '1') {
+  throw new Error('Carga bloqueada: usa HTTP local o front y LOADTEST_DISPOSABLE=1 en un stack desechable.');
+}
+
 const USUARIO = __ENV.ADMIN_USER || 'admin';
 const PASSWORD = __ENV.ADMIN_PASS || '';
 
@@ -40,7 +46,7 @@ export function setup() {
   );
 
   if (respuesta.status !== 200) {
-    fail(`Login fallo: HTTP ${respuesta.status} ${respuesta.body}`);
+    fail(`Login fallo: HTTP ${respuesta.status}`);
   }
 
   const cookie = respuesta.cookies.datacontrol_sesion;
@@ -49,7 +55,7 @@ export function setup() {
 }
 
 const RUTAS = [
-  '/api/v1/ordenes',
+  '/api/v1/ordenes/pagina?pagina=1&tamano=50',
   '/api/v1/catalogos/productos',
   '/api/v1/catalogos/hornos',
   '/api/v1/notificaciones/pendientes',
@@ -66,6 +72,6 @@ export default function (datos) {
     'sin 429': (r) => r.status !== 429,
   });
 
-  // Sondeo cada 20 s por usuario, mas el tiempo de las acciones normales.
+  // Pausa de 2 a 4 segundos entre consultas por usuario.
   sleep(2 + Math.random() * 2);
 }
