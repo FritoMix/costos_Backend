@@ -62,7 +62,12 @@ def leer_token_acceso(token: str) -> dict:
     Lanza CredencialesInvalidas si el token esta vencido o alterado.
     """
     try:
-        return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        return jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["exp", "iat", "sub", "rol", "tv"]},
+        )
     except jwt.ExpiredSignatureError as exc:
         raise CredencialesInvalidas("Tu sesión expiró. Vuelve a iniciar sesión.") from exc
     except jwt.PyJWTError as exc:

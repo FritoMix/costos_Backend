@@ -9,8 +9,9 @@ escritas a mano.
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL, make_url
 
 
 class Settings(BaseSettings):
@@ -93,6 +94,20 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    @model_validator(mode="after")
+    def validar_produccion(self) -> "Settings":
+        if self.es_produccion:
+            if len(self.jwt_secret_key.encode("utf-8")) < 32 or self.jwt_secret_key == (
+                "clave-de-desarrollo-cambiar-en-produccion"
+            ):
+                raise ValueError("JWT_SECRET_KEY debe ser una clave propia de al menos 32 bytes.")
+            if not self.origenes_cors or any(
+                origen == "*" or not origen.startswith("https://")
+                for origen in self.origenes_cors
+            ):
+                raise ValueError("CORS_ORIGINS debe contener orígenes HTTPS explícitos en producción.")
+        return self
+
     @property
     def origenes_cors(self) -> list[str]:
         """CORS_ORIGINS=a,b,c -> ["a", "b", "c"]."""
@@ -111,10 +126,14 @@ class Settings(BaseSettings):
         """
         if self.database_url_externa:
             return self._normalizar(self.database_url_externa)
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.postgres_user,
+            password=self.postgres_password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        ).render_as_string(hide_password=False)
 
     @property
     def destino_base_datos(self) -> str:
@@ -122,9 +141,8 @@ class Settings(BaseSettings):
         A donde se esta intentando conectar, SIN la contrasena. Sirve para
         escribirlo en el log sin filtrar credenciales.
         """
-        sin_driver = self.database_url.split("://", 1)[-1]
-        # usuario:clave@host:puerto/base  ->  host:puerto/base
-        return sin_driver.split("@")[-1] if "@" in sin_driver else sin_driver
+        url = make_url(self.database_url)
+        return f"{url.host}:{url.port or 5432}/{url.database}"
 
     @property
     def usa_host_de_compose(self) -> bool:

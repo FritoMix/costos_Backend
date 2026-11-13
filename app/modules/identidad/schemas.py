@@ -7,8 +7,18 @@ por la API, y los datos que entran se validan antes de tocar la logica.
 """
 
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+
+def _validar_password_bcrypt(valor: str) -> str:
+    if len(valor.encode("utf-8")) > 72:
+        raise ValueError("La contraseña no puede superar 72 bytes UTF-8.")
+    return valor
+
+
+PasswordNueva = Annotated[str, Field(min_length=8, max_length=72), AfterValidator(_validar_password_bcrypt)]
 
 
 class RolSalida(BaseModel):
@@ -33,7 +43,7 @@ class UsuarioSalida(BaseModel):
 class UsuarioCrear(BaseModel):
     nombre_completo: str = Field(min_length=3, max_length=150)
     nombre_usuario: str = Field(min_length=3, max_length=50)
-    password: str = Field(min_length=8, max_length=128)
+    password: PasswordNueva
     rol_id: int
     activo: bool = True
 
@@ -45,7 +55,7 @@ class UsuarioActualizar(BaseModel):
     activo: bool = True
     # Solo si el administrador quiere cambiarla; si viene vacia, se deja
     # la que ya tenia.
-    password: str | None = Field(default=None, min_length=8, max_length=128)
+    password: PasswordNueva | None = None
 
 
 class LoginPeticion(BaseModel):
@@ -66,4 +76,4 @@ class SesionSalida(BaseModel):
 
 class CambiarPasswordPeticion(BaseModel):
     password_actual: str = Field(min_length=1)
-    password_nueva: str = Field(min_length=8, max_length=128)
+    password_nueva: PasswordNueva

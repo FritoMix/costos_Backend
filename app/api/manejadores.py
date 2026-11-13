@@ -60,7 +60,12 @@ def registrar_manejadores(app: FastAPI) -> None:
                 # que json.dumps no sabe serializar (por ejemplo un Decimal en
                 # los limites de un campo numerico). Sin esto, el manejador de
                 # errores fallaba y devolvia un 500 en vez del 422.
-                "errores": jsonable_encoder(exc.errors()),
+                "errores": jsonable_encoder(
+                    [
+                        {k: v for k, v in error.items() if k in {"loc", "msg", "type"}}
+                        for error in exc.errors()
+                    ]
+                ),
             },
         )
 
@@ -70,12 +75,10 @@ def registrar_manejadores(app: FastAPI) -> None:
         La base de datos rechazo la operacion (llave duplicada, indice
         unico...). Es la ultima linea de defensa de las reglas de negocio.
         """
-        logger.warning("Integridad rechazada por PostgreSQL: %s", exc)
+        logger.warning("Integridad rechazada por PostgreSQL (%s)", type(exc.orig).__name__)
         return JSONResponse(
             status_code=409,
-            content={
-                "detail": "La operación choca con un dato que ya existe. Recarga e intenta de nuevo."
-            },
+            content={"detail": "La operación choca con un dato que ya existe. Recarga e intenta de nuevo."},
         )
 
     @app.exception_handler(Exception)
