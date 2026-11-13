@@ -107,7 +107,10 @@ def registrar_manejadores(app: FastAPI) -> None:
             "Error no controlado tipo=%s request_id=%s ubicaciones=%s",
             type(exc).__name__,
             getattr(request.state, "request_id", ""),
-            traceback.format_list(traceback.extract_tb(exc.__traceback__)),
+            [
+                f"{marco.filename}:{marco.lineno}:{marco.name}"
+                for marco in traceback.extract_tb(exc.__traceback__)
+            ],
         )
         return JSONResponse(
             status_code=500,

@@ -46,3 +46,26 @@ def test_timeouts_respetan_opciones_existentes(monkeypatch):
     assert "-csearch_path=public" in args["options"]
     assert "statement_timeout=30000" in args["options"]
     assert args["connect_timeout"] == 5
+
+
+def test_error_inesperado_conserva_traza_sin_imprimir_sus_valores(caplog):
+    from fastapi import FastAPI
+
+    from app.api.manejadores import registrar_manejadores
+    from app.main import middleware_trazabilidad
+
+    app_prueba = FastAPI()
+    registrar_manejadores(app_prueba)
+    app_prueba.middleware("http")(middleware_trazabilidad)
+
+    @app_prueba.get("/error")
+    def fallar():
+        raise RuntimeError("password=valor-que-no-debe-publicarse")
+
+    cliente = TestClient(app_prueba)
+    respuesta = cliente.get("/error")
+    assert respuesta.status_code == 500
+    assert len(respuesta.headers["X-Request-ID"]) == 32
+    assert "valor-que-no-debe-publicarse" not in respuesta.text + caplog.text
+    assert "RuntimeError" in caplog.text
+    cliente.close()
