@@ -21,7 +21,7 @@ vacias: el registro se guarda igual y no se inventa ningun valor.
 """
 
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -72,13 +72,18 @@ def calcular_aceite(
     if litros_por_cm is None:
         return None, None, None, None
 
-    volumen = (diferencia_cm * litros_por_cm).quantize(Decimal("0.01"))
+    volumen = (diferencia_cm * litros_por_cm).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     densidad = obtener_densidad_vigente(db, horno.id, fecha)
     if densidad is None:
         return litros_por_cm, volumen, None, None
 
-    return litros_por_cm, volumen, densidad, (volumen * densidad).quantize(Decimal("0.01"))
+    return (
+        litros_por_cm,
+        volumen,
+        densidad,
+        (volumen * densidad).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+    )
 
 
 def listar_registros(db: Session, orden_id: int) -> list[RegistroHorno]:
@@ -277,14 +282,14 @@ def _aplicar_datos(
 
     registro.hora_inicio = inicio
     registro.hora_fin = fin
-    registro.cantidad_bultos = total_bultos.quantize(CENTAVOS)
+    registro.cantidad_bultos = total_bultos.quantize(CENTAVOS, rounding=ROUND_HALF_UP)
     registro.kg_crudos_calculados = sum((fila.kg_crudos_calculados for fila in filas), Decimal("0")).quantize(
         CENTAVOS
     )
     if all(fila.kg_fritos_estimados is not None for fila in filas):
         registro.kg_fritos_estimados = sum(
             (fila.kg_fritos_estimados for fila in filas), Decimal("0")
-        ).quantize(CENTAVOS)
+        ).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
     else:
         registro.kg_fritos_estimados = None
     registro.operarios_seleccion = datos.operarios_seleccion

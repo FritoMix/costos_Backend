@@ -14,7 +14,7 @@ Reglas que viven aqui (confirmadas con la planta, no inventadas):
 
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -30,6 +30,7 @@ from app.modules.catalogos.models import Horno, Producto
 from app.modules.catalogos.service import obtener_configuracion
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.notificaciones import service as notificaciones
+from app.modules.produccion.dominio.estados import requiere_transicion
 from app.modules.produccion.dominio.limites import (
     validar_conteo_tandas,
     validar_horas_de_orden,
@@ -185,7 +186,9 @@ def calcular_cantidad_programada(
                 "ni uno general. Pídele al Administrador que lo configure en Catálogos > "
                 "Productos (o en Catálogos > Configuración como valor general)."
             )
-        cantidad_kg = (datos.cantidad_canastillas * peso_canastilla).quantize(Decimal("0.01"))
+        cantidad_kg = (datos.cantidad_canastillas * peso_canastilla).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         return cantidad_kg, datos.cantidad_canastillas
 
     if datos.cantidad_kg is None or datos.cantidad_kg <= 0:
@@ -362,10 +365,8 @@ def editar_orden(
 def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None = None) -> OrdenProduccion:
     orden = bloquear_orden(db, orden.id)
     antes = estado_orden(orden)
-    if orden.estado == EstadoOrden.EN_PRODUCCION:
+    if not requiere_transicion(orden.estado, "iniciar"):
         return orden
-    if orden.estado != EstadoOrden.PENDIENTE:
-        raise ErrorDeValidacion("Solo se puede iniciar una orden que esté Pendiente.")
     if orden.formula_obligatoria and not orden.referencias:
         raise ErrorDeValidacion("Bodega debe definir la fórmula antes de iniciar la producción.")
 
@@ -408,10 +409,8 @@ def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None =
 def finalizar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None = None) -> OrdenProduccion:
     orden = bloquear_orden(db, orden.id)
     antes = estado_orden(orden)
-    if orden.estado == EstadoOrden.FINALIZADA:
+    if not requiere_transicion(orden.estado, "finalizar"):
         return orden
-    if orden.estado != EstadoOrden.EN_PRODUCCION:
-        raise ErrorDeValidacion("Solo se puede finalizar una orden que esté En producción.")
     orden.estado = EstadoOrden.FINALIZADA
     orden.hora_fin = datetime.now(UTC)
     db.flush()
@@ -424,10 +423,8 @@ def finalizar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None
 def cancelar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None = None) -> OrdenProduccion:
     orden = bloquear_orden(db, orden.id)
     antes = estado_orden(orden)
-    if orden.estado == EstadoOrden.CANCELADA:
+    if not requiere_transicion(orden.estado, "cancelar"):
         return orden
-    if orden.estado not in EstadoOrden.ACTIVOS:
-        raise ErrorDeValidacion("Esta orden ya no se puede cancelar.")
     orden.estado = EstadoOrden.CANCELADA
     db.flush()
     db.refresh(orden)

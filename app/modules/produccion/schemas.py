@@ -4,6 +4,7 @@ Contratos de entrada y salida del modulo Produccion.
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -335,9 +336,7 @@ class RegistroHornoGuardar(BaseModel):
     @model_validator(mode="after")
     def _exigir_mezcla(self) -> "RegistroHornoGuardar":
         """Una tanda necesita el formato nuevo o los dos campos heredados."""
-        if not self.referencias and (
-            self.referencia_papa_id is None or self.cantidad_bultos is None
-        ):
+        if not self.referencias and (self.referencia_papa_id is None or self.cantidad_bultos is None):
             raise ValueError("Debes indicar al menos una referencia para la tanda.")
         if self.referencias:
             ids = [fila.referencia_papa_id for fila in self.referencias]
@@ -378,7 +377,9 @@ class RecepcionGuardar(BaseModel):
     sabor_id: int
     cantidad_sabor_kg: Decimal = Field(gt=0)
     # Peso REAL de cada canastilla, una por una. Nunca un valor asumido.
-    pesos_canastillas: list[Decimal] = Field(min_length=1)
+    pesos_canastillas: list[Annotated[Decimal, Field(gt=0, max_digits=6, decimal_places=2)]] = Field(
+        min_length=1
+    )
 
 
 # --- Detalle completo de una orden ----------------------------------------

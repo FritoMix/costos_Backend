@@ -6,7 +6,7 @@ en el modulo Analitica; aqui solo se suma lo que lleva esta orden para que
 el supervisor vea el avance.
 """
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -75,7 +75,9 @@ def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:
 
     avance = None
     if orden.cantidad_programada and orden.cantidad_programada > 0:
-        avance = (kg_papa_frita / orden.cantidad_programada * 100).quantize(Decimal("0.01"))
+        avance = (kg_papa_frita / orden.cantidad_programada * 100).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
 
     return TotalesOrden(
         kg_crudos=kg_crudos,

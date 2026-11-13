@@ -6,7 +6,7 @@ las canastillas UNA POR UNA: los kg recibidos son la suma de esos pesos
 reales, nunca un estimado. El turno se detecta solo a partir de la hora.
 """
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -78,7 +78,7 @@ def _aplicar_datos(
     recepcion.hora_fin = fin
     recepcion.sabor_id = datos.sabor_id
     recepcion.cantidad_sabor_kg = datos.cantidad_sabor_kg
-    recepcion.kg_recibidos = sum(pesos, Decimal("0")).quantize(Decimal("0.01"))
+    recepcion.kg_recibidos = sum(pesos, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # Las canastillas se reemplazan por completo con las nuevas.
     recepcion.canastillas.clear()

@@ -32,3 +32,37 @@ def test_rechaza_sql_alterado_aunque_la_version_sea_igual(tmp_path):
 def test_no_ignora_carpeta_ausente(tmp_path):
     with pytest.raises(RuntimeError, match="No existe"):
         aplicar_migraciones_pendientes(NoConectar(), tmp_path / "ausente")
+
+
+@pytest.mark.parametrize("peso", ["-1", "0", "0.005", "10000"])
+def test_peso_de_canastilla_respeta_escala_y_positividad(peso):
+    from pydantic import ValidationError
+
+    from app.modules.produccion.schemas import RecepcionGuardar
+
+    with pytest.raises(ValidationError):
+        RecepcionGuardar(
+            hora_inicio="06:00", hora_fin="07:00", sabor_id=1, cantidad_sabor_kg="1", pesos_canastillas=[peso]
+        )
+
+
+@pytest.mark.parametrize(
+    "accion,origenes,destino",
+    [
+        ("iniciar", {"pendiente"}, "en_produccion"),
+        ("finalizar", {"en_produccion"}, "finalizada"),
+        ("cancelar", {"pendiente", "en_produccion"}, "cancelada"),
+    ],
+)
+@pytest.mark.parametrize("estado", ["pendiente", "en_produccion", "finalizada", "cancelada"])
+def test_matriz_completa_de_transiciones(accion, origenes, destino, estado):
+    from app.core.errores import ErrorDeValidacion
+    from app.modules.produccion.dominio.estados import requiere_transicion
+
+    if estado == destino:
+        assert requiere_transicion(estado, accion) is False
+    elif estado in origenes:
+        assert requiere_transicion(estado, accion) is True
+    else:
+        with pytest.raises(ErrorDeValidacion):
+            requiere_transicion(estado, accion)

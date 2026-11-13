@@ -15,7 +15,7 @@ Reglas:
 
 import logging
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -171,16 +171,19 @@ def _advertencias(
     if total_kg_fritos is None or cantidad_programada <= 0:
         return []
     diferencia = total_kg_fritos - cantidad_programada
-    diferencia_pct = (diferencia / cantidad_programada * CIEN).quantize(CUATRO_DECIMALES)
+    diferencia_pct = (diferencia / cantidad_programada * CIEN).quantize(
+        CUATRO_DECIMALES, rounding=ROUND_HALF_UP
+    )
     if abs(diferencia_pct) <= UMBRAL_DIFERENCIA_PCT:
         return []
+    diferencia_kg = abs(diferencia).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
     if diferencia > 0:
         return [
-            f"La fórmula produce {diferencia.quantize(CENTAVOS)} kg fritos más de lo pedido "
+            f"La fórmula produce {diferencia_kg} kg fritos más de lo pedido "
             f"({diferencia_pct.quantize(Decimal('0.01'))} %). Revisa las horas o los bultos."
         ]
     return [
-        f"La fórmula produce {abs(diferencia).quantize(CENTAVOS)} kg fritos menos de lo pedido "
+        f"La fórmula produce {diferencia_kg} kg fritos menos de lo pedido "
         f"({abs(diferencia_pct).quantize(Decimal('0.01'))} %). Revisa la mezcla o pide más horas."
     ]
 
@@ -243,8 +246,8 @@ def validar_mezcla_en_horno(
     if capacidad_kg < cantidad_programada:
         raise ErrorDeValidacion(
             "Con esta mezcla, la capacidad máxima produce "
-            f"{capacidad_kg.quantize(CENTAVOS)} kg y la orden pide "
-            f"{cantidad_programada.quantize(CENTAVOS)} kg. "
+            f"{capacidad_kg.quantize(CENTAVOS, rounding=ROUND_HALF_UP)} kg y la orden pide "
+            f"{cantidad_programada.quantize(CENTAVOS, rounding=ROUND_HALF_UP)} kg. "
             "Ajusta la mezcla o pide más horas."
         )
 
@@ -275,9 +278,11 @@ def filas_de_mezcla(
                 rendimiento_fritura_pct=rendimiento,
                 kg_crudos_por_tanda=kg_crudos,
                 kg_fritos_por_tanda=kg_fritos,
-                kg_crudos_planificados=(kg_crudos * horas).quantize(CENTAVOS),
+                kg_crudos_planificados=(kg_crudos * horas).quantize(CENTAVOS, rounding=ROUND_HALF_UP),
                 kg_fritos_estimados=(
-                    (kg_fritos * horas).quantize(CENTAVOS) if kg_fritos is not None else None
+                    (kg_fritos * horas).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
+                    if kg_fritos is not None
+                    else None
                 ),
                 creado_por_id=usuario_id,
             )
@@ -302,7 +307,9 @@ def obtener(db: Session, orden: OrdenProduccion) -> FormulaSalida:
     )
     avance = None
     if total_planificados > 0:
-        avance = (total_producidos / Decimal(total_planificados) * CIEN).quantize(Decimal("0.01"))
+        avance = (total_producidos / Decimal(total_planificados) * CIEN).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
 
     return FormulaSalida(
         orden_id=orden.id,
@@ -385,9 +392,11 @@ def recalcular_totales(db: Session, orden: OrdenProduccion) -> None:
         raise ErrorDeValidacion("La orden debe tener al menos una hora programada.")
     for fila in orden.referencias:
         fila.bultos_planificados = fila.bultos_por_tanda * horas
-        fila.kg_crudos_planificados = (fila.kg_crudos_por_tanda * horas).quantize(CENTAVOS)
+        fila.kg_crudos_planificados = (fila.kg_crudos_por_tanda * horas).quantize(
+            CENTAVOS, rounding=ROUND_HALF_UP
+        )
         fila.kg_fritos_estimados = (
-            (fila.kg_fritos_por_tanda * horas).quantize(CENTAVOS)
+            (fila.kg_fritos_por_tanda * horas).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
             if fila.kg_fritos_por_tanda is not None
             else None
         )
@@ -529,9 +538,11 @@ def proyectar(
             kg_fritos_planificados = None
         else:
             kg_fritos = calcular_kg_fritos_estimados(kg_crudos, rendimiento)
-            kg_fritos_planificados = (kg_fritos * orden.horas_produccion).quantize(CENTAVOS)
+            kg_fritos_planificados = (kg_fritos * orden.horas_produccion).quantize(
+                CENTAVOS, rounding=ROUND_HALF_UP
+            )
             total_fritos += kg_fritos_planificados
-        total_crudos += (kg_crudos * orden.horas_produccion).quantize(CENTAVOS)
+        total_crudos += (kg_crudos * orden.horas_produccion).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
         filas.append(
             FormulaProyeccionReferencia(
                 referencia_id=referencia.id,
@@ -543,7 +554,9 @@ def proyectar(
                 rendimiento_fritura_pct=rendimiento,
                 kg_crudos_por_tanda=kg_crudos,
                 kg_fritos_por_tanda=kg_fritos,
-                kg_crudos_planificados=(kg_crudos * orden.horas_produccion).quantize(CENTAVOS),
+                kg_crudos_planificados=(kg_crudos * orden.horas_produccion).quantize(
+                    CENTAVOS, rounding=ROUND_HALF_UP
+                ),
                 kg_fritos_estimados=kg_fritos_planificados,
             )
         )
@@ -557,15 +570,19 @@ def proyectar(
                 Decimal("0"),
             )
             / Decimal(total_por_tanda)
-        ).quantize(CUATRO_DECIMALES)
+        ).quantize(CUATRO_DECIMALES, rounding=ROUND_HALF_UP)
 
     diferencia: Decimal | None = None
     diferencia_pct: Decimal | None = None
     if total_fritos_estimado is not None:
-        diferencia = (total_fritos_estimado - orden.cantidad_programada).quantize(CENTAVOS)
+        diferencia = (total_fritos_estimado - orden.cantidad_programada).quantize(
+            CENTAVOS, rounding=ROUND_HALF_UP
+        )
         diferencia_pct = Decimal("0")
         if orden.cantidad_programada > 0:
-            diferencia_pct = (diferencia / orden.cantidad_programada * CIEN).quantize(CUATRO_DECIMALES)
+            diferencia_pct = (diferencia / orden.cantidad_programada * CIEN).quantize(
+                CUATRO_DECIMALES, rounding=ROUND_HALF_UP
+            )
 
     kg_por_bulto = [
         kg_fritos_por_bulto(referencia.peso_promedio_bulto_kg, referencia.rendimiento_fritura_pct)
@@ -639,7 +656,9 @@ def _salida_bodega(
     total_producido = producidos if tiene_formula else None
     avance = None
     if total_plan and total_producido is not None:
-        avance = (total_producido / Decimal(total_plan) * CIEN).quantize(Decimal("0.01"))
+        avance = (total_producido / Decimal(total_plan) * CIEN).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
     base = OrdenSalida.model_validate(orden).model_dump()
     return OrdenBodegaSalida(
         **base,
