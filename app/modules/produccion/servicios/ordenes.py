@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import Select, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -61,13 +61,13 @@ def obtener_orden(db: Session, orden_id: int) -> OrdenProduccion:
     return orden
 
 
-def listar_ordenes(
+def _consulta_ordenes(
     db: Session,
     *,
     usuario: Usuario,
     estado: str | None = None,
     solo_propias: bool | None = None,
-) -> list[OrdenProduccion]:
+) -> Select:
     """
     Lista de ordenes visibles.
 
@@ -85,8 +85,31 @@ def listar_ordenes(
     if solo_propias:
         consulta = consulta.where(OrdenProduccion.supervisor_id == usuario.id)
 
-    consulta = consulta.order_by(OrdenProduccion.fecha.desc(), OrdenProduccion.id.desc()).limit(500)
-    return list(db.scalars(consulta).unique().all())
+    return consulta.order_by(OrdenProduccion.fecha.desc(), OrdenProduccion.id.desc())
+
+
+def listar_ordenes(
+    db: Session, *, usuario: Usuario, estado: str | None = None, solo_propias: bool | None = None
+) -> list[OrdenProduccion]:
+    consulta = _consulta_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
+    return list(db.scalars(consulta.limit(500)).unique().all())
+
+
+def pagina_ordenes(
+    db: Session,
+    *,
+    usuario: Usuario,
+    pagina: int = 1,
+    tamano: int = 50,
+    estado: str | None = None,
+    solo_propias: bool | None = None,
+) -> dict:
+    if not 1 <= pagina <= 1_000_000 or not 1 <= tamano <= 100:
+        raise ErrorDeValidacion("Página o tamaño de página fuera de rango.")
+    consulta = _consulta_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
+    total = db.scalar(select(func.count()).select_from(consulta.order_by(None).subquery()))
+    filas = db.scalars(consulta.limit(tamano).offset((pagina - 1) * tamano)).unique().all()
+    return {"items": list(filas), "total": total, "pagina": pagina, "tamano": tamano}
 
 
 # --- Numeracion ------------------------------------------------------------

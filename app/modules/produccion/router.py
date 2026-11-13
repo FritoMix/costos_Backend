@@ -15,7 +15,7 @@ supervisor y operarios. Bodega no consulta ordenes ni sus registros.
 """
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
@@ -36,6 +36,7 @@ from app.modules.produccion.schemas import (
     OrdenBodegaDetalle,
     OrdenBodegaSalida,
     OrdenDetalle,
+    OrdenesPagina,
     OrdenGuardar,
     OrdenSalida,
     RecepcionGuardar,
@@ -265,6 +266,20 @@ def crear(
         datos,
         lambda: servicio_ordenes.crear_orden(db, datos, usuario),
         OrdenSalida,
+    )
+
+
+@router.get("/pagina", response_model=OrdenesPagina)
+def pagina_ordenes(
+    db: BD,
+    usuario: VeOrdenes,
+    pagina: Annotated[int, Query(ge=1, le=1_000_000)] = 1,
+    tamano: Annotated[int, Query(ge=1, le=100)] = 50,
+    estado: Literal["pendiente", "en_produccion", "finalizada", "cancelada"] | None = None,
+    solo_propias: bool | None = None,
+):
+    return servicio_ordenes.pagina_ordenes(
+        db, usuario=usuario, pagina=pagina, tamano=tamano, estado=estado, solo_propias=solo_propias
     )
 
 

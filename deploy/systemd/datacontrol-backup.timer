@@ -1,10 +1,10 @@
 [Unit]
-Description=Ejecuta el backup diario de DATACONTROL
+Description=Ejecuta el backup horario de DATACONTROL
 
 [Timer]
-OnCalendar=*-*-* 02:00:00
+OnCalendar=hourly
 Persistent=true
-RandomizedDelaySec=10m
+RandomizedDelaySec=0
 AccuracySec=1m
 
 [Install]

@@ -11,13 +11,15 @@ error, y nunca le muestra al usuario un rastro tecnico.
 """
 
 import logging
+import traceback
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.core.errores import ErrorDeAplicacion
 
@@ -83,12 +85,32 @@ def registrar_manejadores(app: FastAPI) -> None:
             content={"detail": "La operación choca con un dato que ya existe. Recarga e intenta de nuevo."},
         )
 
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(PoolTimeoutError)
+    async def _base_no_disponible(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning(
+            "Base de datos temporalmente no disponible tipo=%s request_id=%s",
+            type(exc).__name__,
+            getattr(request.state, "request_id", ""),
+        )
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "3"},
+            content={"detail": "El servicio está temporalmente ocupado. Intenta de nuevo."},
+        )
+
     @app.exception_handler(Exception)
-    async def _error_inesperado(_: Request, exc: Exception) -> JSONResponse:
+    async def _error_inesperado(request: Request, exc: Exception) -> JSONResponse:
         # El detalle tecnico queda en los logs del servidor, nunca en la
         # respuesta: al usuario no se le muestra un rastro de Python.
-        logger.exception("Error no controlado", exc_info=exc)
+        logger.error(
+            "Error no controlado tipo=%s request_id=%s ubicaciones=%s",
+            type(exc).__name__,
+            getattr(request.state, "request_id", ""),
+            traceback.format_list(traceback.extract_tb(exc.__traceback__)),
+        )
         return JSONResponse(
             status_code=500,
+            headers={"X-Request-ID": getattr(request.state, "request_id", "")},
             content={"detail": "Ocurrió un error inesperado. Intenta de nuevo."},
         )
