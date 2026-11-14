@@ -24,3 +24,5 @@ backups/
 
 # Autorización OAuth del ejecutor de respaldos.
 **/rclone.conf
+
+test-results/

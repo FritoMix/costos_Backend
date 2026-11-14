@@ -47,6 +47,7 @@ from app.modules.produccion.models import (
 from app.modules.produccion.schemas import OrdenGuardar
 from app.modules.produccion.servicios import formula as servicio_formula
 from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
+from app.modules.produccion.servicios.lectura import opciones_listado
 from app.modules.produccion.servicios.registros import bloquear_orden
 
 logger = logging.getLogger("datacontrol")
@@ -92,7 +93,7 @@ def listar_ordenes(
     db: Session, *, usuario: Usuario, estado: str | None = None, solo_propias: bool | None = None
 ) -> list[OrdenProduccion]:
     consulta = _consulta_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
-    return list(db.scalars(consulta.limit(500)).unique().all())
+    return list(db.scalars(consulta.options(*opciones_listado()).limit(500)).unique().all())
 
 
 def pagina_ordenes(
@@ -108,7 +109,9 @@ def pagina_ordenes(
         raise ErrorDeValidacion("Página o tamaño de página fuera de rango.")
     consulta = _consulta_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
     total = db.scalar(select(func.count()).select_from(consulta.order_by(None).subquery()))
-    filas = db.scalars(consulta.limit(tamano).offset((pagina - 1) * tamano)).unique().all()
+    filas = db.scalars(
+        consulta.options(*opciones_listado()).limit(tamano).offset((pagina - 1) * tamano)
+    ).unique().all()
     return {"items": list(filas), "total": total, "pagina": pagina, "tamano": tamano}
 
 

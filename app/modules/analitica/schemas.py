@@ -4,8 +4,9 @@ Contratos del modulo Analitica.
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class FiltrosAnalisis(BaseModel):
@@ -16,12 +17,19 @@ class FiltrosAnalisis(BaseModel):
 
     fecha_desde: date | None = None
     fecha_hasta: date | None = None
-    turno_id: int | None = None
-    horno_id: int | None = None
-    producto_id: int | None = None
-    categoria_id: int | None = None
-    supervisor_id: int | None = None
-    sabor_id: int | None = None
+    turno_id: int | None = Field(default=None, gt=0)
+    horno_id: int | None = Field(default=None, gt=0)
+    producto_id: int | None = Field(default=None, gt=0)
+    categoria_id: int | None = Field(default=None, gt=0)
+    supervisor_id: int | None = Field(default=None, gt=0)
+    sabor_id: int | None = Field(default=None, gt=0)
+
+
+    @model_validator(mode="after")
+    def validar_rango(self) -> Self:
+        if self.fecha_desde and self.fecha_hasta and self.fecha_desde > self.fecha_hasta:
+            raise ValueError("La fecha inicial no puede ser posterior a la fecha final.")
+        return self
 
 
 class Desglose(BaseModel):
