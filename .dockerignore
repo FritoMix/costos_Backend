@@ -11,3 +11,6 @@ backups/
 **/*.dump
 **/*.age
 **/*.identity
+
+# Autorización OAuth del ejecutor de respaldos.
+**/rclone.conf

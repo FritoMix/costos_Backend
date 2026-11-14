@@ -55,6 +55,9 @@ def test_restaura_solo_en_base_generada_y_limpia_si_falla(tmp_path, monkeypatch)
     monkeypatch.setattr(backup, "ejecutar", lambda args, *a, **kw: llamadas.append(args))
 
     def fallar(*args, **kwargs):
+        restaurar = args[1]
+        assert "--clean" in restaurar and "--if-exists" in restaurar
+        assert restaurar[restaurar.index("--dbname") + 1] == llamadas[0][-1]
         raise backup.ErrorOperacion("falló el descifrado")
 
     monkeypatch.setattr(backup, "tuberia", fallar)
@@ -113,3 +116,38 @@ def test_url_no_llega_a_los_argumentos_y_descodifica_credenciales():
     assert env["PGPASSWORD"] == "p@ss"
     assert env["PGSSLMODE"] == "require"
     assert "DATABASE_URL" not in env
+
+
+@pytest.mark.parametrize("seleccion", ["*", "public,", "--clean", "public;DROP", "auth.*"])
+def test_seleccion_de_esquemas_rechaza_patrones_y_opciones(seleccion, tmp_path, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(backup, "tuberia", lambda *a, **kw: llamadas.append(a))
+    with pytest.raises(backup.ErrorOperacion, match="BACKUP_SCHEMAS"):
+        backup.respaldo({
+            "DATABASE_URL": "postgresql://test:secreto@localhost/planta_test",
+            "APP_ENV": "testing",
+            "BACKUP_AGE_RECIPIENT": "age1publica",
+            "BACKUP_SCHEMAS": seleccion,
+            "BACKUP_DIR": str(tmp_path),
+        })
+    assert llamadas == []
+    assert not list(tmp_path.iterdir())
+
+
+def test_esquema_public_se_limita_y_queda_registrado(tmp_path, monkeypatch):
+    llamadas = []
+
+    def exportar(primero, segundo, env, destino):
+        llamadas.append(primero)
+        destino.write(b"cifrado simulado")
+
+    monkeypatch.setattr(backup, "tuberia", exportar)
+    archivo = backup.respaldo({
+        "DATABASE_URL": "postgresql://test:secreto@localhost/planta_test",
+        "APP_ENV": "testing",
+        "BACKUP_AGE_RECIPIENT": "age1publica",
+        "BACKUP_SCHEMAS": "public",
+        "BACKUP_DIR": str(tmp_path),
+    })
+    assert llamadas == [["pg_dump", "--format=custom", "--no-owner", "--no-privileges", "--schema=public"]]
+    assert json.loads(archivo.with_suffix(".age.json").read_text())["schemas"] == ["public"]

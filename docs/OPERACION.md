@@ -5,7 +5,9 @@
 Este repositorio prepara y prueba el mecanismo. No demuestra que una copia de
 producción se esté generando ni que exista ya un almacenamiento externo conectado.
 La receta anterior para Docker se sustituye por clientes PostgreSQL nativos,
-age y rclone en un equipo de operación. No se ejecuta dentro de la API.
+age y rclone en un equipo de operación o en la imagen de Cron Job separada.
+No se ejecuta dentro de la API. Para Supabase y Drive personal, seguir
+[RESPALDOS_DRIVE.md](RESPALDOS_DRIVE.md).
 
 Propuesta a validar con FritoMix: RPO de 1 hora, RTO de 60 minutos, copia horaria,
 retención local de 14 días y retención externa de 30 días mediante la política
@@ -92,8 +94,9 @@ con la ruta a la identidad privada, y disponer del .dump.age y su .dump.age.json
 El script valida el manifiesto antes de conectar, genera un nombre temporal
 impredecible, crea una base nueva y restaura en una transacción. Comprueba tablas,
 conteos, historial de migraciones y suma de cantidades programadas, y elimina la
-base temporal al salir. Nunca admite TEST_DB ni restaura con --clean sobre una base
-existente. Si createdb falla, no ejecuta dropdb. Para backups antiguos sin cifrado
+base temporal al salir. Nunca admite TEST_DB ni nombres de bases existentes. `pg_restore --clean
+--if-exists` se limita al nombre temporal generado y creado por esta ejecución,
+para poder recrear también el esquema public de una copia filtrada. Si createdb falla, no ejecuta dropdb. Para backups antiguos sin cifrado
 ni manifiesto, preparar un procedimiento aparte en un entorno aislado.
 
 La prueba de CI exporta y restaura un backup cifrado real con datos ficticios y
