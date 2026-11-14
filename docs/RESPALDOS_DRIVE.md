@@ -106,6 +106,7 @@ No publicar URLs de descarga ni habilitar enlaces públicos de esa carpeta.
 3. Seguir `docs/OPERACION.md`, usando `restore_backup_test.sh`; nunca apuntar
    `RESTORE_DATABASE_URL` al Supabase de producción. El simulacro crea y elimina
    una base temporal, por lo que el servidor de pruebas debe admitir CREATEDB.
+   La limpieza de objetos de la restauración solo opera en esa base recién creada.
 4. Verificar conteos, cantidades, acceso y procesos funcionales recuperados.
 5. Configurar avisos de ejecución fallida en Render y revisar que aparezcan copias
    recientes. Alertar también ante ausencia de ejecuciones, no solo errores.

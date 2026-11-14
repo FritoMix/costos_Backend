@@ -195,7 +195,7 @@ def restaurar_prueba(archivo: Path, env: dict) -> dict:
         raise ErrorOperacion("El respaldo no coincide con su manifiesto de integridad.")
     config = configuracion(env, "RESTORE_DATABASE_URL")
     destino = f"datacontrol_restore_test_{uuid4().hex}"
-    # Nunca aceptar nombres recibidos desde el usuario ni usar --clean sobre una base existente.
+    # Solo este nombre generado y creado aquí puede recibir limpieza de objetos al restaurar.
     creada = False
     inicio = datetime.now(UTC)
     try:
@@ -207,6 +207,8 @@ def restaurar_prueba(archivo: Path, env: dict) -> dict:
                 "pg_restore",
                 "--dbname",
                 destino,
+                "--clean",
+                "--if-exists",
                 "--single-transaction",
                 "--exit-on-error",
                 "--no-owner",

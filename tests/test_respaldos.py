@@ -55,6 +55,9 @@ def test_restaura_solo_en_base_generada_y_limpia_si_falla(tmp_path, monkeypatch)
     monkeypatch.setattr(backup, "ejecutar", lambda args, *a, **kw: llamadas.append(args))
 
     def fallar(*args, **kwargs):
+        restaurar = args[1]
+        assert "--clean" in restaurar and "--if-exists" in restaurar
+        assert restaurar[restaurar.index("--dbname") + 1] == llamadas[0][-1]
         raise backup.ErrorOperacion("falló el descifrado")
 
     monkeypatch.setattr(backup, "tuberia", fallar)
