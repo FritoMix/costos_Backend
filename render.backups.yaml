@@ -1,0 +1,29 @@
+# Plantilla opcional. No está incluida en render.yaml ni crea servicios por sí sola.
+# Crear/sincronizar este Blueprint tiene costo. Revisar primero docs/RESPALDOS_DRIVE.md.
+services:
+  - type: cron
+    name: datacontrol-backup-drive
+    runtime: docker
+    repo: https://github.com/FritoMix/costos_Backend
+    branch: main
+    region: oregon
+    plan: starter
+    schedule: "0 7 * * *"
+    dockerContext: .
+    dockerfilePath: ./deploy/backup.Dockerfile
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: BACKUP_AGE_RECIPIENT
+        sync: false
+      - key: BACKUP_REMOTE
+        value: gdrive:DataControl-respaldos
+      - key: BACKUP_SCHEMAS
+        value: public
+      - key: PGSSLMODE
+        value: require
+      - key: RCLONE_CONFIG_SOURCE
+        value: /etc/secrets/rclone.conf
+# Agregar rclone.conf como Secret File desde el panel; no incluirlo en este archivo.

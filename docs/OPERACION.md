@@ -5,7 +5,9 @@
 Este repositorio prepara y prueba el mecanismo. No demuestra que una copia de
 producción se esté generando ni que exista ya un almacenamiento externo conectado.
 La receta anterior para Docker se sustituye por clientes PostgreSQL nativos,
-age y rclone en un equipo de operación. No se ejecuta dentro de la API.
+age y rclone en un equipo de operación o en la imagen de Cron Job separada.
+No se ejecuta dentro de la API. Para Supabase y Drive personal, seguir
+[RESPALDOS_DRIVE.md](RESPALDOS_DRIVE.md).
 
 Propuesta a validar con FritoMix: RPO de 1 hora, RTO de 60 minutos, copia horaria,
 retención local de 14 días y retención externa de 30 días mediante la política

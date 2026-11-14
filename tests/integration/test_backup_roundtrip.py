@@ -17,7 +17,8 @@ from scripts import backup_postgres as backup
     ),
     reason="Faltan herramientas PostgreSQL/age; CI las instala explícitamente.",
 )
-def test_backup_cifrado_y_restore_recuperan_registros(engine_integracion, tmp_path):
+@pytest.mark.parametrize("esquemas", ["", "public"])
+def test_backup_cifrado_y_restore_recuperan_registros(engine_integracion, tmp_path, esquemas):
     identidad = tmp_path / "clave.identity"
     subprocess.run(["age-keygen", "-o", str(identidad)], check=True, capture_output=True)
     publico = subprocess.check_output(["age-keygen", "-y", str(identidad)], text=True).strip()
@@ -28,6 +29,7 @@ def test_backup_cifrado_y_restore_recuperan_registros(engine_integracion, tmp_pa
         "DATABASE_URL": url,
         "RESTORE_DATABASE_URL": url,
         "APP_ENV": "testing",
+        "BACKUP_SCHEMAS": esquemas,
         "BACKUP_DIR": str(tmp_path),
         "BACKUP_AGE_RECIPIENT": publico,
         "BACKUP_AGE_IDENTITY": str(identidad),

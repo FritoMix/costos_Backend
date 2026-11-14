@@ -60,10 +60,29 @@ jobs:
           age --version
 
       - name: Lint (ruff)
-        run: ruff check app tests scripts/backup_postgres.py
+        run: ruff check app tests scripts/backup_postgres.py scripts/backup_render.py
 
       - name: Escaneo de dependencias (pip-audit)
         run: pip-audit -r requirements.txt --strict
 
       - name: Pruebas con cobertura (pytest)
         run: pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=70
+
+  imagen_respaldo:
+    name: Imagen del ejecutor de respaldos
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Construir imagen sin secretos ni acceso a producción
+        run: docker build -f deploy/backup.Dockerfile -t datacontrol-backup:test .
+      - name: Verificar herramientas y usuario sin privilegios
+        run: |
+          docker run --rm --entrypoint sh datacontrol-backup:test -c 'test "$(id -u)" != 0 && pg_dump --version && python3 --version && age --version && rclone version'
+      - name: Comprobar fallo controlado sin secretos
+        run: |
+          set +e
+          docker run --rm datacontrol-backup:test > /tmp/backup-smoke.log 2>&1
+          estado=$?
+          set -e
+          test "$estado" -eq 1
+          grep -q "Respaldo fallido" /tmp/backup-smoke.log

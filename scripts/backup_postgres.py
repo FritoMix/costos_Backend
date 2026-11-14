@@ -114,6 +114,12 @@ def respaldo(env: dict) -> Path:
         raise ErrorOperacion("Falta BACKUP_AGE_RECIPIENT: no se crean copias sin cifrar.")
     if not pruebas and not re.match(r"^[A-Za-z0-9_-]+:.+", remoto):
         raise ErrorOperacion("Configura BACKUP_REMOTE con un destino externo de rclone.")
+    seleccion = env.get("BACKUP_SCHEMAS", "").strip()
+    esquemas = [nombre.strip() for nombre in seleccion.split(",")] if seleccion else []
+    if any(not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", nombre) for nombre in esquemas):
+        raise ErrorOperacion("BACKUP_SCHEMAS debe contener nombres simples separados por comas.")
+    argumentos_dump = ["pg_dump", "--format=custom", "--no-owner", "--no-privileges"]
+    argumentos_dump.extend(f"--schema={nombre}" for nombre in dict.fromkeys(esquemas))
     retencion = int(env.get("RETENTION_DAYS", "14"))
     if retencion < 1:
         raise ErrorOperacion("RETENTION_DAYS debe ser mayor a cero.")
@@ -126,7 +132,7 @@ def respaldo(env: dict) -> Path:
         with parcial.open("xb") as salida:
             os.fchmod(salida.fileno(), 0o600)
             tuberia(
-                ["pg_dump", "--format=custom", "--no-owner", "--no-privileges"],
+                argumentos_dump,
                 ["age", "--recipient", destinatario],
                 config,
                 salida,
@@ -143,6 +149,7 @@ def respaldo(env: dict) -> Path:
                 "sha256": sha256(archivo),
                 "creado_en": datetime.now(UTC).isoformat(),
                 "formato": "pg_dump-custom+age",
+                "schemas": esquemas,
             },
         )
         if remoto:
@@ -160,6 +167,7 @@ def respaldo(env: dict) -> Path:
             if (
                 datos.get("archivo") == viejo.name
                 and datos.get("source_id") == origen_id
+                and datos.get("schemas", []) == esquemas
                 and datetime.fromisoformat(datos["creado_en"]) < limite
             ):
                 viejo.unlink()
