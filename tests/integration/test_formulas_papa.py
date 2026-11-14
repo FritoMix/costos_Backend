@@ -376,3 +376,96 @@ def test_la_activa_para_orden_trae_los_totales_de_las_horas(db, datos_base):
     assert activa.total_bultos_planificados == 30
     assert activa.total_kg_crudos_planificados == Decimal("1500.00")
     assert activa.total_kg_fritos_planificados == Decimal("375.00")
+
+
+def test_iniciar_recupera_formula_activada_despues_de_crear(db, datos_base, orden_guardar):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    assert orden.formula_estado == "sin_formula"
+    plantilla = servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
+    servicio_plantillas.activar(db, servicio_plantillas.obtener(db, plantilla.id))
+
+    servicio_ordenes.iniciar_orden(db, orden, datos_base.operario_horno)
+    assert orden.estado == "en_produccion"
+    assert orden.formula_papa_id == plantilla.id
+    assert len(orden.referencias) == 1
+    assert orden.referencias[0].bultos_por_tanda == 10
+    servicio_ordenes.iniciar_orden(db, orden, datos_base.operario_horno)
+    assert len(orden.referencias) == 1
+    assert _contar_avisos(db, orden.id, TipoNotificacion.FORMULA_LISTA) == 2
+
+
+def test_iniciar_sin_activa_explica_que_debe_hacer_bodega(db, datos_base, orden_guardar):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    with pytest.raises(ErrorDeValidacion, match="producto no tiene una fórmula activa"):
+        servicio_ordenes.iniciar_orden(db, orden)
+    assert orden.estado == "pendiente"
+    assert orden.hora_inicio is None
+    assert orden.referencias == []
+
+
+@pytest.mark.parametrize("motivo", ["capacidad", "cantidad", "inactiva"])
+def test_iniciar_explica_incompatibilidad_y_permite_reintentar(
+    db, datos_base, orden_guardar, motivo
+):
+    plantilla = servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
+    servicio_plantillas.activar(db, servicio_plantillas.obtener(db, plantilla.id))
+    if motivo == "capacidad":
+        datos_base.horno.capacidad_bultos_hora = None
+        patron = "capacidad de bultos por hora"
+    elif motivo == "cantidad":
+        patron = "capacidad máxima produce"
+    else:
+        datos_base.referencia_papa.activo = False
+        patron = "inactiva"
+    db.flush()
+    orden = servicio_ordenes.crear_orden(
+        db, orden_guardar(cantidad_kg=Decimal("5000.00") if motivo == "cantidad" else Decimal("100.00")),
+        datos_base.supervisor,
+    )
+    with pytest.raises(ErrorDeValidacion, match=patron):
+        servicio_ordenes.iniciar_orden(db, orden)
+    assert orden.estado == "pendiente"
+    assert orden.referencias == []
+    assert orden.formula_papa_id is None
+    assert orden.hora_inicio is None
+    # Al corregir la causa, se recupera la misma orden sin recrearla.
+    datos_base.horno.capacidad_bultos_hora = 50
+    datos_base.referencia_papa.activo = True
+    orden.cantidad_programada = Decimal("100.00")
+    db.flush()
+    servicio_ordenes.iniciar_orden(db, orden)
+    assert orden.estado == "en_produccion"
+    assert orden.formula_papa_id == plantilla.id
+
+
+def test_iniciar_preserva_copia_aunque_cambie_la_plantilla(db, datos_base, orden_guardar):
+    plantilla = servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
+    servicio_plantillas.activar(db, servicio_plantillas.obtener(db, plantilla.id))
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    servicio_plantillas.actualizar(
+        db, servicio_plantillas.obtener(db, plantilla.id),
+        _plantilla(datos_base, (datos_base.referencia_papa, 5)),
+    )
+    servicio_ordenes.iniciar_orden(db, orden)
+    assert orden.referencias[0].bultos_por_tanda == 10
+
+
+def test_fallo_al_iniciar_revierte_formula_y_estado(db, datos_base, orden_guardar, monkeypatch):
+    from app.modules.produccion.servicios import ordenes
+
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    plantilla = servicio_plantillas.crear(db, _plantilla(datos_base), datos_base.bodeguero)
+    servicio_plantillas.activar(db, servicio_plantillas.obtener(db, plantilla.id))
+
+    def fallar(*args, **kwargs):
+        raise RuntimeError("fallo controlado despues de copiar la formula")
+
+    monkeypatch.setattr(ordenes.notificaciones, "programar_aviso_fin_produccion", fallar)
+    with pytest.raises(RuntimeError, match="fallo controlado"):
+        servicio_ordenes.iniciar_orden(db, orden)
+    db.refresh(orden)
+    assert orden.estado == "pendiente"
+    assert orden.hora_inicio is None
+    assert orden.formula_papa_id is None
+    assert orden.referencias == []
+    assert _contar_avisos(db, orden.id, TipoNotificacion.FORMULA_LISTA) == 0

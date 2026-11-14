@@ -374,17 +374,27 @@ def activa_para_orden(db: Session, *, producto_id: int, horas: int | None = None
 
 
 @atomica
-def aplicar_a_orden(db: Session, orden: OrdenProduccion) -> bool:
+def aplicar_a_orden(
+    db: Session, orden: OrdenProduccion, *, exigir_valida: bool = False
+) -> bool:
     """
-    Copia la formula activa del producto a la orden recien creada.
+    Copia la formula activa si la orden todavia no tiene una mezcla congelada.
 
     Devuelve False (sin tocar la orden) si no hay activa o si la mezcla no
     cabe en el horno o no alcanza la cantidad pedida: en ese caso Bodega la
-    define a mano y recibe el aviso.
+    define a mano y recibe el aviso. Al iniciar, exigir_valida devuelve el
+    motivo de rechazo al operario, en vez de ocultarlo como falta de formula.
     """
+    if orden.referencias:
+        return True
     _bloquear_catalogo(db)
     activa = obtener_activa(db, orden.producto_id)
     if activa is None:
+        if exigir_valida:
+            raise ErrorDeValidacion(
+                "Este producto no tiene una fórmula activa. Bodega debe definir la fórmula "
+                "de esta orden o activar una para el producto antes de iniciar la producción."
+            )
         return False
     try:
         mezcla = resolver_mezcla(db, activa.referencias)
@@ -395,6 +405,8 @@ def aplicar_a_orden(db: Session, orden: OrdenProduccion) -> bool:
             cantidad_programada=orden.cantidad_programada,
         )
     except ErrorDeValidacion as exc:
+        if exigir_valida:
+            raise ErrorDeValidacion(f"No se pudo aplicar la fórmula activa: {exc}") from exc
         logger.warning(
             "Fórmula activa %s no aplicable a %s: %s",
             activa.id,
