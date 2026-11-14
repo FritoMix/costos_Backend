@@ -393,8 +393,6 @@ def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None =
     antes = estado_orden(orden)
     if not requiere_transicion(orden.estado, "iniciar"):
         return orden
-    if orden.formula_obligatoria and not orden.referencias:
-        raise ErrorDeValidacion("Bodega debe definir la fórmula antes de iniciar la producción.")
 
     ocupado = db.scalar(
         select(OrdenProduccion).where(
@@ -408,6 +406,17 @@ def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None =
             f'El horno "{orden.horno.nombre}" ya tiene la orden {ocupado.numero_orden} en '
             "producción. Debes finalizarla antes de iniciar otra."
         )
+
+    # Una plantilla puede activarse o corregirse despues de crear la orden.
+    # Solo se recuperan pendientes sin copia; nunca se reemplaza una mezcla guardada.
+    if orden.formula_obligatoria and not orden.referencias:
+        servicio_formulas_papa.aplicar_a_orden(db, orden, exigir_valida=True)
+        registrar(
+            db, "formula_orden", orden.id, "aplicar_activa_al_iniciar",
+            usuario.id if usuario else None, None,
+            servicio_formula.obtener(db, orden).model_dump(mode="json"),
+        )
+        notificaciones.avisar_formula_lista(db, orden)
 
     orden.estado = EstadoOrden.EN_PRODUCCION
     orden.hora_inicio = datetime.now(UTC)
