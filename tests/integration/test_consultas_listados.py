@@ -29,8 +29,9 @@ def test_listados_cargan_solo_relaciones_necesarias(db, datos_base, orden_guarda
         try:
             with Session(bind=conexion, join_transaction_mode='create_savepoint') as lectura:
                 filas = lectura.scalars(consulta.options(*opciones_listado()) if optimizada else consulta)
+                objetos_orden = filas.unique().all()
                 salida = [OrdenSalida.model_validate(fila).model_dump(mode='json')
-                          for fila in filas.unique().all()]
+                          for fila in objetos_orden]
                 objetos = len(lectura.identity_map)
             return salida, len(sentencias), objetos
         finally:

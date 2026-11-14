@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from app.modules.produccion.schemas import FormulaPapaGuardar, FormulaReferenciaGuardar
+from app.modules.produccion.schemas import FormulaPapaGuardar, FormulaPapaReferenciaGuardar
 from app.modules.produccion.servicios import formulas_papa, ordenes
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'limpiar_operaciones.sql'
@@ -21,7 +21,7 @@ def test_limpieza_conserva_usuarios_catalogos_y_formulas_y_permite_nueva_orden(
 ):
     plantilla = formulas_papa.crear(db, FormulaPapaGuardar(
         nombre='Plantilla que debe conservarse', producto_id=datos_base.producto.id,
-        referencias=[FormulaReferenciaGuardar(
+        referencias=[FormulaPapaReferenciaGuardar(
             referencia_papa_id=datos_base.referencia_papa.id, bultos_por_tanda=10,
         )],
     ), datos_base.admin)
