@@ -9,7 +9,9 @@ SELECT jsonb_build_object(
     'orden_referencias', (SELECT count(*) FROM public.orden_referencias),
     'notificaciones', (SELECT count(*) FROM public.notificaciones),
     'operaciones_idempotentes', (SELECT count(*) FROM public.operaciones_idempotentes),
-    'ordenes_produccion', (SELECT count(*) FROM public.ordenes_produccion)
+    'ordenes_produccion', (SELECT count(*) FROM public.ordenes_produccion),
+    'auditoria_operativa', (SELECT count(*) FROM public.auditoria_operaciones
+        WHERE recurso IN ('orden','horno','saborizado','formula_orden'))
 ) AS se_eliminara,
 jsonb_build_object(
     'roles', (SELECT count(*) FROM public.roles),
