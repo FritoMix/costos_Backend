@@ -56,6 +56,7 @@ from app.modules.produccion.schemas import (
     OrdenBodegaSalida,
     OrdenSalida,
 )
+from app.modules.produccion.servicios.lectura import opciones_listado
 from app.modules.produccion.servicios.registros import bloquear_orden
 from app.modules.produccion.servicios.totales import producido_por_referencia
 
@@ -699,7 +700,7 @@ def listar_ordenes_bodega(
             ~select(OrdenReferencia.id).where(OrdenReferencia.orden_id == OrdenProduccion.id).exists(),
         )
     consulta = consulta.order_by(OrdenProduccion.fecha.desc(), OrdenProduccion.id.desc()).limit(500)
-    ordenes = list(db.scalars(consulta).unique().all())
+    ordenes = list(db.scalars(consulta.options(*opciones_listado())).unique().all())
     if not ordenes:
         return []
 

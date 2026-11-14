@@ -36,6 +36,7 @@ jobs:
       # Habilita las pruebas de tests/integration/. El fixture borra y
       # recrea el schema public de esta base desechable.
       TEST_DATABASE_URL: postgresql+psycopg://test:test@localhost:5432/datacontrol_test
+      PERF_RESULT_DIR: test-results
 
     steps:
       - name: Descargar codigo
@@ -67,6 +68,15 @@ jobs:
 
       - name: Pruebas con cobertura (pytest)
         run: pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=70
+
+      - name: Publicar mediciones de consultas
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: consultas-listados
+          path: test-results/consultas-listados.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   imagen_respaldo:
     name: Imagen del ejecutor de respaldos

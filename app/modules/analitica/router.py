@@ -7,7 +7,9 @@ Toda esta seccion es exclusiva del Administrador / Analista.
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.limite import limiter
@@ -42,16 +44,24 @@ def filtros_desde_query(
     Convierte los parametros de la URL en un objeto de filtros. Las fechas
     llegan como texto para poder aceptar vacio ("") desde el formulario.
     """
-    return FiltrosAnalisis(
-        fecha_desde=fecha_desde or None,
-        fecha_hasta=fecha_hasta or None,
-        turno_id=turno_id,
-        horno_id=horno_id,
-        producto_id=producto_id,
-        categoria_id=categoria_id,
-        supervisor_id=supervisor_id,
-        sabor_id=sabor_id,
-    )
+    try:
+        return FiltrosAnalisis(
+            fecha_desde=fecha_desde or None,
+            fecha_hasta=fecha_hasta or None,
+            turno_id=turno_id,
+            horno_id=horno_id,
+            producto_id=producto_id,
+            categoria_id=categoria_id,
+            supervisor_id=supervisor_id,
+            sabor_id=sabor_id,
+        )
+    except ValidationError as exc:
+        errores = [
+            {**error, "loc": ("query", *error["loc"])}
+            for error in exc.errors(include_context=False, include_input=False, include_url=False)
+        ]
+        raise RequestValidationError(errores) from None
+
 
 
 Filtros = Annotated[FiltrosAnalisis, Depends(filtros_desde_query)]
