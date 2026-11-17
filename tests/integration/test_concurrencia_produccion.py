@@ -193,7 +193,6 @@ def test_misma_clave_concurrente_crea_una_sola_orden(escenario):
                 escenario.datos,
                 lambda: ordenes.crear_orden(db, escenario.datos, actor),
                 OrdenSalida,
-    RecepcionGuardar,
             )
             return respuesta["id"]
 
