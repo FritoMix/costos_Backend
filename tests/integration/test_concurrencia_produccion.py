@@ -15,17 +15,18 @@ from app.core.errores import ErrorDeValidacion
 from app.db.idempotencia import ejecutar
 from app.db.migraciones import aplicar_migraciones_pendientes
 from app.modules.bodega.models import ReferenciaPapa
-from app.modules.catalogos.models import CategoriaProducto, Horno, Producto, Turno
+from app.modules.catalogos.models import CategoriaProducto, Horno, Producto, Sabor, Turno
 from app.modules.identidad.models import Rol, Usuario
-from app.modules.produccion.models import OrdenProduccion, RegistroHorno
+from app.modules.produccion.models import OrdenProduccion, RegistroHorno, RegistroSaborizado
 from app.modules.produccion.schemas import (
     FormulaGuardar,
     FormulaReferenciaGuardar,
     OrdenGuardar,
     OrdenSalida,
+    RecepcionGuardar,
     RegistroHornoGuardar,
 )
-from app.modules.produccion.servicios import formula, horno, ordenes
+from app.modules.produccion.servicios import formula, horno, ordenes, saborizado
 
 
 @pytest.fixture
@@ -63,7 +64,8 @@ def escenario(engine_integracion):
             referencia = ReferenciaPapa(
                 nombre="Referencia concurrente", activo=True, peso_promedio_bulto_kg=Decimal("50")
             )
-            db.add_all([usuario, equipo, producto, referencia])
+            sabor = Sabor(nombre="Sabor concurrente", activo=True)
+            db.add_all([usuario, equipo, producto, referencia, sabor])
             db.commit()
             datos = OrdenGuardar(
                 turno_id=turno.id,
@@ -73,8 +75,8 @@ def escenario(engine_integracion):
                 cantidad_kg=Decimal("100"),
                 horas_produccion=2,
             )
-            actor_id, ref_id = usuario.id, referencia.id
-        yield SimpleNamespace(engine=motor, datos=datos, actor_id=actor_id, ref_id=ref_id)
+            actor_id, ref_id, sabor_id = usuario.id, referencia.id, sabor.id
+        yield SimpleNamespace(engine=motor, datos=datos, actor_id=actor_id, ref_id=ref_id, sabor_id=sabor_id)
     finally:
         motor.dispose()
         with engine_integracion.begin() as c:
@@ -198,3 +200,59 @@ def test_misma_clave_concurrente_crea_una_sola_orden(escenario):
     assert resultados[0] == resultados[1]
     with Session(escenario.engine) as db:
         assert db.scalar(select(func.count()).select_from(OrdenProduccion)) == 1
+
+
+def test_recepciones_simultaneas_no_duplican_pesos_ni_horarios(escenario):
+    identificador = preparar(escenario, iniciar=True)
+
+    def guardar():
+        with Session(escenario.engine) as db:
+            orden = db.get(OrdenProduccion, identificador)
+            datos = RecepcionGuardar(
+                hora_inicio=time(7), hora_fin=time(8), sabor_id=escenario.sabor_id,
+                cantidad_sabor_kg=Decimal("1.00"), pesos_canastillas=[Decimal("6.55"), Decimal("5.45")],
+            )
+            saborizado.crear_recepcion(db, orden, datos, db.get(Usuario, escenario.actor_id))
+            return "guardada"
+
+    assert sorted(simultaneos([guardar, guardar])) == ["guardada", "rechazado"]
+    with Session(escenario.engine) as db:
+        filas = db.scalars(select(RegistroSaborizado)).all()
+        assert len(filas) == 1
+        assert filas[0].kg_recibidos == Decimal("12.00")
+        assert sum(c.peso_kg for c in filas[0].canastillas) == filas[0].kg_recibidos
+
+
+def test_finalizar_y_recibir_simultaneamente_no_escribe_despues_del_cierre(escenario):
+    identificador = preparar(escenario, iniciar=True)
+
+    def recibir():
+        with Session(escenario.engine) as db:
+            saborizado.crear_recepcion(
+                db, db.get(OrdenProduccion, identificador),
+                RecepcionGuardar(hora_inicio=time(7), hora_fin=time(8), sabor_id=escenario.sabor_id,
+                                 cantidad_sabor_kg=1, pesos_canastillas=[Decimal("6.00")]),
+                db.get(Usuario, escenario.actor_id),
+            )
+            return "recibida"
+
+    def finalizar():
+        with Session(escenario.engine) as db:
+            ordenes.finalizar_orden(db, db.get(OrdenProduccion, identificador))
+            return "finalizada"
+
+    resultados = simultaneos([recibir, finalizar])
+    assert "finalizada" in resultados
+    assert resultados[0] in {"recibida", "rechazado"}
+    with Session(escenario.engine) as db:
+        orden = db.get(OrdenProduccion, identificador)
+        assert orden.estado == "finalizada"
+        filas = db.scalars(select(RegistroSaborizado)).all()
+        assert len(filas) == (1 if resultados[0] == "recibida" else 0)
+        with pytest.raises(ErrorDeValidacion, match="En producción"):
+            saborizado.crear_recepcion(
+                db, orden,
+                RecepcionGuardar(hora_inicio=time(8), hora_fin=time(9), sabor_id=escenario.sabor_id,
+                                 cantidad_sabor_kg=1, pesos_canastillas=[Decimal("6.00")]),
+                db.get(Usuario, escenario.actor_id),
+            )

@@ -1005,3 +1005,63 @@ def test_formulas_papa_respetan_los_permisos(
     _login(operario, "operario_horno_prueba")
     assert operario.get(f"{API}/bodega/formulas-papa").status_code == 403
     operario.close()
+
+
+@pytest.mark.parametrize("nombre,horno_permitido,saborizado_permitido,inicio_permitido,formula_permitida", [
+    ("admin_prueba", True, True, True, True),
+    ("supervisor_prueba", False, False, True, False),
+    ("operario_horno_prueba", True, False, True, False),
+    ("operario_saborizado_prueba", False, True, True, False),
+    ("bodeguero_prueba", False, False, False, True),
+])
+def test_matriz_de_permisos_de_escritura_en_produccion(
+    cliente, db, datos_base, orden_guardar, nombre, horno_permitido,
+    saborizado_permitido, inicio_permitido, formula_permitida,
+):
+    from app.modules.produccion.servicios import ordenes
+
+    orden = ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    _login(cliente, nombre)
+    # El rol autorizado alcanza la validación de negocio (orden pendiente sin fórmula).
+    # El resto se rechaza antes de ejecutar la escritura.
+    assert cliente.post(f"{API}/ordenes/{orden.id}/iniciar").status_code == (400 if inicio_permitido else 403)
+    tanda = {
+        "hora_inicio": "06:00", "hora_fin": "07:00", "referencia_papa_id": datos_base.referencia_papa.id,
+        "cantidad_bultos": "5.00", "operarios_seleccion": 1, "operarios_horno": 1,
+        "nivel_aceite_inicial_cm": "20.00", "nivel_aceite_final_cm": "18.00",
+        "temperatura_aceite_c": "175.00",
+    }
+    respuesta = cliente.post(f"{API}/ordenes/{orden.id}/registros-horno", json=tanda)
+    assert respuesta.status_code == (400 if horno_permitido else 403), respuesta.text
+    recepcion = {
+        "hora_inicio": "07:00", "hora_fin": "08:00", "sabor_id": datos_base.sabor.id,
+        "cantidad_sabor_kg": "1.00", "pesos_canastillas": ["6.55", "5.45"],
+    }
+    respuesta = cliente.post(f"{API}/ordenes/{orden.id}/recepciones", json=recepcion)
+    assert respuesta.status_code == (400 if saborizado_permitido else 403), respuesta.text
+    respuesta = cliente.put(f"{API}/ordenes/{orden.id}/formula", json={
+        "referencias": [{"referencia_papa_id": datos_base.referencia_papa.id, "bultos_por_tanda": 10}],
+    })
+    assert respuesta.status_code == (200 if formula_permitida else 403), respuesta.text
+
+
+def test_precision_invalida_devuelve_422_legible_sin_guardar(cliente, db, datos_base, orden_guardar):
+    from sqlalchemy import func, select
+
+    from app.modules.produccion.models import OrdenProduccion
+
+    _login(cliente)
+    antes = db.scalar(select(func.count()).select_from(OrdenProduccion))
+    datos = orden_guardar().model_dump(mode="json") | {"cantidad_kg": "0.001"}
+    respuesta = cliente.post(f"{API}/ordenes", json=datos)
+    assert respuesta.status_code == 422
+    assert respuesta.json()["detail"] == "Cantidad programada: Usa como máximo 2 decimales."
+    assert db.scalar(select(func.count()).select_from(OrdenProduccion)) == antes
+    datos["cantidad_kg"] = "100000000"
+    respuesta = cliente.post(f"{API}/ordenes", json=datos)
+    assert respuesta.status_code == 422
+    assert "máximo permitido" in respuesta.json()["detail"]
+    datos["cantidad_kg"] = "120.25"
+    respuesta = cliente.post(f"{API}/ordenes", json=datos)
+    assert respuesta.status_code == 201
+    assert Decimal(respuesta.json()["cantidad_programada"]) == Decimal("120.25")

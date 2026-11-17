@@ -26,7 +26,7 @@ from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
 from app.core.tiempo import hoy_local
 from app.db.auditoria import estado_orden, registrar
 from app.db.transacciones import atomica
-from app.modules.catalogos.models import Horno, Producto
+from app.modules.catalogos.models import Horno, Producto, Turno
 from app.modules.catalogos.service import obtener_configuracion
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.notificaciones import service as notificaciones
@@ -154,7 +154,9 @@ def _validar_horas(datos: OrdenGuardar) -> None:
         raise ErrorDeValidacion("La producción debe programarse por al menos 1 hora completa.")
 
 
-def _validar_catalogos(db: Session, datos: OrdenGuardar) -> tuple[Horno, Producto]:
+def _validar_catalogos(
+    db: Session, datos: OrdenGuardar, *, turno_actual_id: int | None = None
+) -> tuple[Horno, Producto]:
     if datos.destino not in (DestinoOrden.NACIONAL, DestinoOrden.EXPORTACION):
         raise ErrorDeValidacion("El destino debe ser Nacional o Exportación.")
     if datos.unidad_solicitada not in (UnidadSolicitada.KG, UnidadSolicitada.CANASTILLAS):
@@ -182,6 +184,12 @@ def _validar_catalogos(db: Session, datos: OrdenGuardar) -> tuple[Horno, Product
         raise ErrorDeValidacion("El producto seleccionado no es válido.")
     if producto.categoria_id != datos.categoria_id:
         raise ErrorDeValidacion(f'El producto "{producto.nombre_comercial}" no pertenece a esa categoría.')
+
+    turno = db.get(Turno, datos.turno_id)
+    if turno is None:
+        raise ErrorDeValidacion("El turno seleccionado no existe.")
+    if not turno.activo and datos.turno_id != turno_actual_id:
+        raise ErrorDeValidacion("El turno seleccionado está inactivo. Elige un turno activo.")
 
     return horno, producto
 
@@ -215,6 +223,11 @@ def calcular_cantidad_programada(
         cantidad_kg = (datos.cantidad_canastillas * peso_canastilla).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
+        if not Decimal("0.01") <= cantidad_kg <= Decimal("99999999.99"):
+            raise ErrorDeValidacion(
+                "La conversión de canastillas debe resultar entre 0.01 y 99999999.99 kg. "
+                "Revisa la cantidad y el peso de la canastilla."
+            )
         return cantidad_kg, datos.cantidad_canastillas
 
     if datos.cantidad_kg is None or datos.cantidad_kg <= 0:
@@ -288,7 +301,7 @@ def editar_orden(
         orden.formula_actualizada_por_id = None
         orden.formula_fecha_actualizacion = None
         db.flush()
-    horno, producto = _validar_catalogos(db, datos)
+    horno, producto = _validar_catalogos(db, datos, turno_actual_id=orden.turno_id)
 
     if datos.horas_produccion is not None:
         registros_horno = db.scalars(

@@ -533,3 +533,44 @@ def test_numeracion_concurrente_no_repite(engine_integracion):
         with Session(engine_integracion) as sesion:
             sesion.execute(delete(SecuenciaOrden).where(SecuenciaOrden.fecha == fecha))
             sesion.commit()
+
+
+def test_turno_inexistente_o_inactivo_no_crea_orden(db, datos_base, orden_guardar):
+    with pytest.raises(ErrorDeValidacion, match="turno seleccionado no existe"):
+        servicio_ordenes.crear_orden(db, orden_guardar(turno_id=999999), datos_base.supervisor)
+    datos_base.turno.activo = False
+    db.flush()
+    with pytest.raises(ErrorDeValidacion, match="turno seleccionado está inactivo"):
+        servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+
+
+def test_turno_historico_se_conserva_al_corregir_la_orden(db, datos_base, orden_guardar):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    datos_base.turno.activo = False
+    db.flush()
+    servicio_ordenes.editar_orden(db, orden, orden_guardar(cantidad_kg=Decimal("120")))
+    assert orden.cantidad_programada == Decimal("120.00")
+
+
+def test_sabor_inactivo_no_admite_nuevas_recepciones_pero_conserva_historial(
+    db, datos_base, orden_guardar, guardar_formula
+):
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    guardar_formula(orden)
+    servicio_ordenes.iniciar_orden(db, orden)
+    anterior = servicio_saborizado.crear_recepcion(
+        db, orden, _recepcion(datos_base), datos_base.operario_saborizado
+    )
+    datos_base.sabor.activo = False
+    db.flush()
+    with pytest.raises(ErrorDeValidacion, match="sabor seleccionado está inactivo"):
+        servicio_saborizado.crear_recepcion(
+            db, orden, _recepcion(datos_base, hora_inicio=time(8), hora_fin=time(9)),
+            datos_base.operario_saborizado
+        )
+    servicio_saborizado.editar_recepcion(
+        db, anterior, _recepcion(datos_base, pesos_canastillas=[Decimal("7.25"), Decimal("5.75")]),
+        datos_base.operario_saborizado,
+    )
+    assert anterior.kg_recibidos == Decimal("13.00")
+    assert len(servicio_saborizado.listar_recepciones(db, orden.id)) == 1

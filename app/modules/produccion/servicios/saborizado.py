@@ -55,8 +55,11 @@ def obtener_recepcion(db: Session, recepcion_id: int) -> RegistroSaborizado:
 def _aplicar_datos(
     db: Session, recepcion: RegistroSaborizado, orden: OrdenProduccion, datos: RecepcionGuardar
 ) -> None:
-    if db.get(Sabor, datos.sabor_id) is None:
+    sabor = db.get(Sabor, datos.sabor_id)
+    if sabor is None:
         raise ErrorDeValidacion("El sabor seleccionado no es válido.")
+    if not sabor.activo and recepcion.sabor_id != datos.sabor_id:
+        raise ErrorDeValidacion("El sabor seleccionado está inactivo. Elige un sabor activo.")
 
     pesos = [peso for peso in datos.pesos_canastillas if peso is not None and peso > 0]
     if not pesos:
