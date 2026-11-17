@@ -1,246 +1,64 @@
-"""
-Logica de negocio de las ordenes de produccion.
+"""Coordinación de operaciones de órdenes y fachada estable para los routers.
 
-Reglas que viven aqui (confirmadas con la planta, no inventadas):
-  * El numero de orden es OP-AAAAMMDD-0001 y reinicia cada dia.
-  * Una orden de exportacion solo puede ir a un horno apto para exportar.
-  * Una orden nacional solo puede ir a un horno que produzca esa categoria.
-  * El producto tiene que pertenecer a la categoria elegida.
-  * Un horno NUNCA puede tener dos ordenes en produccion a la vez.
-  * Si el pedido llego en canastillas, se convierte a kg con un peso
-    ESTIMADO (del producto, o el general): el peso real de cada canastilla
-    se sigue pesando en saborizado.
+Cada escritura mantiene un único límite @atomica: validación, fórmula,
+notificaciones y auditoría se confirman juntas. Las funciones de lectura y
+numeración se reexportan para conservar los puntos de entrada existentes.
 """
 
-import logging
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import Select, func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.borrado_suave import marcar_eliminado_por
-from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.core.errores import ErrorDeValidacion
 from app.core.tiempo import hoy_local
 from app.db.auditoria import estado_orden, registrar
 from app.db.transacciones import atomica
-from app.modules.catalogos.models import Horno, Producto, Turno
-from app.modules.catalogos.service import obtener_configuracion
-from app.modules.identidad.models import RolCodigo, Usuario
+from app.modules.identidad.models import Usuario
 from app.modules.notificaciones import service as notificaciones
 from app.modules.produccion.dominio.estados import requiere_transicion
-from app.modules.produccion.dominio.limites import (
-    validar_conteo_tandas,
-    validar_horas_de_orden,
-)
-from app.modules.produccion.models import (
-    DestinoOrden,
-    EstadoOrden,
-    OrdenProduccion,
-    RegistroHorno,
-    RegistroSaborizado,
-    SecuenciaOrden,
-    UnidadSolicitada,
-)
+from app.modules.produccion.dominio.limites import validar_conteo_tandas, validar_horas_de_orden
+from app.modules.produccion.models import EstadoOrden, OrdenProduccion, RegistroHorno, RegistroSaborizado
 from app.modules.produccion.schemas import OrdenGuardar
 from app.modules.produccion.servicios import formula as servicio_formula
 from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
-from app.modules.produccion.servicios.lectura import opciones_listado
+from app.modules.produccion.servicios.cantidades_ordenes import calcular_cantidad_programada
+from app.modules.produccion.servicios.consultas_ordenes import (
+    buscar_orden_en_horno,
+    listar_ordenes,
+    obtener_orden,
+    pagina_ordenes,
+)
+from app.modules.produccion.servicios.numeracion_ordenes import generar_numero_orden
 from app.modules.produccion.servicios.registros import bloquear_orden
+from app.modules.produccion.servicios.validaciones_ordenes import validar_catalogos
 
-logger = logging.getLogger("datacontrol")
-
-# --- Consultas -------------------------------------------------------------
-
-
-def obtener_orden(db: Session, orden_id: int) -> OrdenProduccion:
-    orden = db.get(OrdenProduccion, orden_id)
-    if orden is None or orden.eliminado:
-        raise RecursoNoEncontrado("Esa orden no existe.")
-    return orden
+__all__ = [
+    "obtener_orden", "listar_ordenes", "pagina_ordenes", "generar_numero_orden",
+    "calcular_cantidad_programada", "crear_orden", "editar_orden", "iniciar_orden",
+    "finalizar_orden", "cancelar_orden", "eliminar_orden",
+]
 
 
-def _consulta_ordenes(
-    db: Session,
-    *,
-    usuario: Usuario,
-    estado: str | None = None,
-    solo_propias: bool | None = None,
-) -> Select:
-    """
-    Lista de ordenes visibles.
-
-    Un supervisor ve por defecto solo las suyas (es lo que gestiona);
-    el administrador ve todas. Los operarios usan el filtro
-    estado='en_produccion' para ver a que orden pueden registrarle datos.
-    """
-    consulta = select(OrdenProduccion).where(OrdenProduccion.eliminado == False)
-
-    if estado is not None:
-        consulta = consulta.where(OrdenProduccion.estado == estado)
-
-    if solo_propias is None:
-        solo_propias = usuario.rol.codigo == RolCodigo.SUPERVISOR
-    if solo_propias:
-        consulta = consulta.where(OrdenProduccion.supervisor_id == usuario.id)
-
-    return consulta.order_by(OrdenProduccion.fecha.desc(), OrdenProduccion.id.desc())
-
-
-def listar_ordenes(
-    db: Session, *, usuario: Usuario, estado: str | None = None, solo_propias: bool | None = None
-) -> list[OrdenProduccion]:
-    consulta = _consulta_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
-    return list(db.scalars(consulta.options(*opciones_listado()).limit(500)).unique().all())
-
-
-def pagina_ordenes(
-    db: Session,
-    *,
-    usuario: Usuario,
-    pagina: int = 1,
-    tamano: int = 50,
-    estado: str | None = None,
-    solo_propias: bool | None = None,
-) -> dict:
-    if not 1 <= pagina <= 1_000_000 or not 1 <= tamano <= 100:
-        raise ErrorDeValidacion("Página o tamaño de página fuera de rango.")
-    consulta = _consulta_ordenes(db, usuario=usuario, estado=estado, solo_propias=solo_propias)
-    total = db.scalar(select(func.count()).select_from(consulta.order_by(None).subquery()))
-    filas = db.scalars(
-        consulta.options(*opciones_listado()).limit(tamano).offset((pagina - 1) * tamano)
-    ).unique().all()
-    return {"items": list(filas), "total": total, "pagina": pagina, "tamano": tamano}
-
-
-# --- Numeracion ------------------------------------------------------------
-
-
-def generar_numero_orden(db: Session, fecha) -> str:
-    """
-    Siguiente numero del dia. Se usa una operacion atomica de PostgreSQL
-    (INSERT ... ON CONFLICT DO UPDATE): si dos supervisores crean una orden
-    en el mismo instante, cada uno recibe un numero distinto.
-    """
-    tabla = SecuenciaOrden.__table__
-    sentencia = (
-        insert(tabla)
-        .values(fecha=fecha, ultimo_numero=1)
-        .on_conflict_do_update(
-            index_elements=[tabla.c.fecha],
-            set_={"ultimo_numero": tabla.c.ultimo_numero + 1},
-        )
-        .returning(tabla.c.ultimo_numero)
-    )
-    consecutivo = db.execute(sentencia).scalar_one()
-    return f"OP-{fecha:%Y%m%d}-{consecutivo:04d}"
-
-
-# --- Validaciones compartidas ---------------------------------------------
-
-
-def _validar_horas(datos: OrdenGuardar) -> None:
-    """
-    La orden se programa por HORAS COMPLETAS: en la planta no existen medias
-    horas de produccion (una orden va 1, 2, 3... horas). El tipo entero del
-    schema ya rechaza los decimales; aqui se cuida el minimo de una hora.
-    El mismo limite esta en la base de datos (ck_orden_horas_minimo_una).
-    """
-    if datos.horas_produccion is None:
-        raise ErrorDeValidacion("Debes indicar cuántas horas se va a mandar a producción.")
-    if datos.horas_produccion < 1:
-        raise ErrorDeValidacion("La producción debe programarse por al menos 1 hora completa.")
-
-
-def _validar_catalogos(
-    db: Session, datos: OrdenGuardar, *, turno_actual_id: int | None = None
-) -> tuple[Horno, Producto]:
-    if datos.destino not in (DestinoOrden.NACIONAL, DestinoOrden.EXPORTACION):
-        raise ErrorDeValidacion("El destino debe ser Nacional o Exportación.")
-    if datos.unidad_solicitada not in (UnidadSolicitada.KG, UnidadSolicitada.CANASTILLAS):
-        raise ErrorDeValidacion("La unidad solicitada debe ser Kg o Canastillas.")
-
-    _validar_horas(datos)
-
-    horno = db.get(Horno, datos.horno_id)
-    if horno is None or not horno.activo:
-        raise ErrorDeValidacion("El horno seleccionado no es válido.")
-
-    if datos.destino == DestinoOrden.EXPORTACION:
-        # Toda orden de exportacion se trabaja en un horno habilitado para
-        # exportar, sin importar la categoria.
-        if not horno.apto_exportacion:
-            raise ErrorDeValidacion(
-                f'El horno "{horno.nombre}" no está habilitado para órdenes de exportación.'
-            )
-    else:
-        if datos.categoria_id not in {c.id for c in horno.categorias}:
-            raise ErrorDeValidacion(f'El horno "{horno.nombre}" no puede producir esa categoría.')
-
-    producto = db.get(Producto, datos.producto_id)
-    if producto is None or not producto.activo:
-        raise ErrorDeValidacion("El producto seleccionado no es válido.")
-    if producto.categoria_id != datos.categoria_id:
-        raise ErrorDeValidacion(f'El producto "{producto.nombre_comercial}" no pertenece a esa categoría.')
-
-    turno = db.get(Turno, datos.turno_id)
-    if turno is None:
-        raise ErrorDeValidacion("El turno seleccionado no existe.")
-    if not turno.activo and datos.turno_id != turno_actual_id:
-        raise ErrorDeValidacion("El turno seleccionado está inactivo. Elige un turno activo.")
-
-    return horno, producto
-
-
-def calcular_cantidad_programada(
-    db: Session, datos: OrdenGuardar, producto: Producto
-) -> tuple[Decimal, Decimal | None]:
-    """
-    Cuantos kg tiene la orden.
-
-    Si al supervisor le pidieron canastillas, se convierten a kg con un
-    peso ESTIMADO por canastilla: primero el del producto (cada referencia
-    pesa distinto; cabello de angel pesa mas), y si no tiene, el valor
-    general de Catalogos > Configuracion.
-
-    Devuelve (cantidad_programada_kg, cantidad_canastillas_solicitadas).
-    """
-    if datos.unidad_solicitada == UnidadSolicitada.CANASTILLAS:
-        if datos.cantidad_canastillas is None or datos.cantidad_canastillas <= 0:
-            raise ErrorDeValidacion("Debes indicar cuántas canastillas se solicitaron.")
-
-        peso_canastilla = producto.peso_estandar_canastilla_kg
-        if peso_canastilla is None:
-            peso_canastilla = obtener_configuracion(db).peso_estandar_canastilla_kg
-        if peso_canastilla is None:
-            raise ErrorDeValidacion(
-                "Todavía no hay un peso estándar de canastilla configurado para este producto "
-                "ni uno general. Pídele al Administrador que lo configure en Catálogos > "
-                "Productos (o en Catálogos > Configuración como valor general)."
-            )
-        cantidad_kg = (datos.cantidad_canastillas * peso_canastilla).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
-        if not Decimal("0.01") <= cantidad_kg <= Decimal("99999999.99"):
-            raise ErrorDeValidacion(
-                "La conversión de canastillas debe resultar entre 0.01 y 99999999.99 kg. "
-                "Revisa la cantidad y el peso de la canastilla."
-            )
-        return cantidad_kg, datos.cantidad_canastillas
-
-    if datos.cantidad_kg is None or datos.cantidad_kg <= 0:
-        raise ErrorDeValidacion("La cantidad programada debe ser mayor a cero.")
-    return datos.cantidad_kg, None
-
-
-# --- Operaciones -----------------------------------------------------------
+def _guardar_cambio_de_horno(db: Session, orden: OrdenProduccion) -> None:
+    """Flush y recarga sin commit; @atomica sigue siendo el dueño de la transacción."""
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "ux_un_horno_en_produccion":
+            raise
+        # Defensa final si dos operaciones observaron el mismo horno libre.
+        raise ErrorDeValidacion(
+            "Ese horno acaba de quedar ocupado por otra orden. Intenta de nuevo."
+        ) from exc
+    db.refresh(orden)
 
 
 @atomica
 def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenProduccion:
-    _horno, producto = _validar_catalogos(db, datos)
+    _horno, producto = validar_catalogos(db, datos)
     cantidad_kg, canastillas = calcular_cantidad_programada(db, datos, producto)
 
     fecha = hoy_local()
@@ -301,7 +119,7 @@ def editar_orden(
         orden.formula_actualizada_por_id = None
         orden.formula_fecha_actualizacion = None
         db.flush()
-    horno, producto = _validar_catalogos(db, datos, turno_actual_id=orden.turno_id)
+    horno, producto = validar_catalogos(db, datos, turno_actual_id=orden.turno_id)
 
     if datos.horas_produccion is not None:
         registros_horno = db.scalars(
@@ -331,14 +149,7 @@ def editar_orden(
     if orden.estado == EstadoOrden.EN_PRODUCCION and datos.horno_id != orden.horno_id:
         # Cambiar de horno con la orden ya en produccion vuelve a chocar
         # con la regla de "un horno, una orden a la vez".
-        ocupado = db.scalar(
-            select(OrdenProduccion).where(
-                OrdenProduccion.horno_id == datos.horno_id,
-                OrdenProduccion.estado == EstadoOrden.EN_PRODUCCION,
-                OrdenProduccion.eliminado.is_(False),
-                OrdenProduccion.id != orden.id,
-            )
-        )
+        ocupado = buscar_orden_en_horno(db, datos.horno_id, excluir_id=orden.id)
         if ocupado is not None:
             raise ErrorDeValidacion(f"Ese horno ya tiene la orden {ocupado.numero_orden} en producción.")
 
@@ -365,15 +176,7 @@ def editar_orden(
     orden.cantidad_programada = cantidad_kg
     orden.destino = datos.destino
 
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "ux_un_horno_en_produccion":
-            raise
-        raise ErrorDeValidacion(
-            "Ese horno acaba de quedar ocupado por otra orden. Intenta de nuevo."
-        ) from exc
-    db.refresh(orden)
+    _guardar_cambio_de_horno(db, orden)
 
     # Con las horas nuevas, los totales planificados de la formula se
     # recalculan (la mezcla por tanda no cambia).
@@ -407,13 +210,7 @@ def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None =
     if not requiere_transicion(orden.estado, "iniciar"):
         return orden
 
-    ocupado = db.scalar(
-        select(OrdenProduccion).where(
-            OrdenProduccion.horno_id == orden.horno_id,
-            OrdenProduccion.estado == EstadoOrden.EN_PRODUCCION,
-            OrdenProduccion.eliminado.is_(False),
-        )
-    )
+    ocupado = buscar_orden_en_horno(db, orden.horno_id)
     if ocupado is not None:
         raise ErrorDeValidacion(
             f'El horno "{orden.horno.nombre}" ya tiene la orden {ocupado.numero_orden} en '
@@ -433,18 +230,7 @@ def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None =
 
     orden.estado = EstadoOrden.EN_PRODUCCION
     orden.hora_inicio = datetime.now(UTC)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "ux_un_horno_en_produccion":
-            raise
-        # Segunda linea de defensa: si dos peticiones pasaron la validacion
-        # casi al mismo tiempo, el indice unico de PostgreSQL rechaza la
-        # segunda. Se convierte en un mensaje claro, no en un error tecnico.
-        raise ErrorDeValidacion(
-            "Ese horno acaba de quedar ocupado por otra orden. Intenta de nuevo."
-        ) from exc
-    db.refresh(orden)
+    _guardar_cambio_de_horno(db, orden)
 
     # El aviso se guarda en la misma transacción que el cambio de estado.
     notificaciones.programar_aviso_fin_produccion(db, orden)

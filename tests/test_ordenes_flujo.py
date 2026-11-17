@@ -15,11 +15,8 @@ from app.modules.produccion.models import (
     UnidadSolicitada,
 )
 from app.modules.produccion.schemas import OrdenGuardar
-from app.modules.produccion.servicios.ordenes import (
-    _validar_catalogos,
-    _validar_horas,
-    calcular_cantidad_programada,
-)
+from app.modules.produccion.servicios.cantidades_ordenes import calcular_cantidad_programada
+from app.modules.produccion.servicios.validaciones_ordenes import validar_catalogos, validar_horas
 
 
 class MockSession:
@@ -59,7 +56,7 @@ def test_orden_exportacion_requiere_horno_apto():
     )
 
     with pytest.raises(ErrorDeValidacion, match="no está habilitado para órdenes de exportación"):
-        _validar_catalogos(db, datos)
+        validar_catalogos(db, datos)
 
 
 def test_calcular_cantidad_en_canastillas_usa_peso_producto():
@@ -111,7 +108,7 @@ def _orden_de_prueba(**cambios) -> OrdenGuardar:
 
 def test_horas_de_produccion_son_obligatorias():
     with pytest.raises(ErrorDeValidacion, match="cuántas horas"):
-        _validar_horas(_orden_de_prueba(horas_produccion=None))
+        validar_horas(_orden_de_prueba(horas_produccion=None))
 
 
 
@@ -122,8 +119,8 @@ def test_horas_de_produccion_no_admiten_medias_horas():
 
 
 def test_horas_de_produccion_validas_no_levantan_error():
-    _validar_horas(_orden_de_prueba(horas_produccion=1))
-    _validar_horas(_orden_de_prueba(horas_produccion=8))
+    validar_horas(_orden_de_prueba(horas_produccion=1))
+    validar_horas(_orden_de_prueba(horas_produccion=8))
 
 def test_horas_de_produccion_minimo_una_en_el_schema():
     """Primera barrera: el schema no deja pasar 0 horas (ge=1)."""
@@ -139,7 +136,7 @@ def test_horas_de_produccion_minimo_una_en_el_servicio():
     """
     orden = OrdenGuardar.model_construct(horas_produccion=0)
     with pytest.raises(ErrorDeValidacion, match="al menos 1 hora"):
-        _validar_horas(orden)
+        validar_horas(orden)
 
 
 @pytest.mark.parametrize("canastillas,peso", [("0.01", "0.01"), ("99999999.99", "6.00")])
