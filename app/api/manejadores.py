@@ -56,6 +56,25 @@ def registrar_manejadores(app: FastAPI) -> None:
         primer_error = exc.errors()[0] if exc.errors() else {}
         campo = ".".join(str(p) for p in primer_error.get("loc", []) if p != "body")
         mensaje = primer_error.get("msg", "Revisa los datos del formulario.")
+        if primer_error.get("type") in {"decimal_max_places", "decimal_max_digits", "decimal_whole_digits"}:
+            etiquetas = {
+                "cantidad_kg": "Cantidad programada", "cantidad_canastillas": "Cantidad de canastillas",
+                "cantidad_bultos": "Cantidad de bultos", "cantidad_sabor_kg": "Cantidad de sabor",
+                "nivel_aceite_inicial_cm": "Nivel inicial de aceite",
+                "nivel_aceite_final_cm": "Nivel final de aceite",
+                "temperatura_aceite_c": "Temperatura del aceite",
+                "cantidad_desperdicio_kg": "Cantidad de desperdicio",
+                "pesos_canastillas": "Peso de canastilla",
+            }
+            for parte in reversed(primer_error.get("loc", [])):
+                if parte in etiquetas:
+                    campo = etiquetas[parte]
+                    break
+            if primer_error["type"] == "decimal_max_places":
+                decimales = primer_error.get("ctx", {}).get("decimal_places", 2)
+                mensaje = f"Usa como máximo {decimales} decimales."
+            else:
+                mensaje = "El valor supera el máximo permitido para este campo."
         return JSONResponse(
             status_code=422,
             content={

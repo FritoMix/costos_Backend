@@ -140,3 +140,11 @@ def test_horas_de_produccion_minimo_una_en_el_servicio():
     orden = OrdenGuardar.model_construct(horas_produccion=0)
     with pytest.raises(ErrorDeValidacion, match="al menos 1 hora"):
         _validar_horas(orden)
+
+
+@pytest.mark.parametrize("canastillas,peso", [("0.01", "0.01"), ("99999999.99", "6.00")])
+def test_conversion_rechaza_cero_redondeado_y_desbordamiento(canastillas, peso):
+    producto = Producto(peso_estandar_canastilla_kg=Decimal(peso))
+    datos = _orden_de_prueba(unidad_solicitada="canastillas", cantidad_canastillas=Decimal(canastillas))
+    with pytest.raises(ErrorDeValidacion, match="conversión de canastillas"):
+        calcular_cantidad_programada(MockSession(), datos, producto)

@@ -87,8 +87,8 @@ class OrdenGuardar(BaseModel):
     unidad_solicitada: str = "kg"
     # Se envia uno u otro segun la unidad: kg directo, o cantidad de
     # canastillas (que la app convierte a kg con el peso estandar).
-    cantidad_kg: Decimal | None = Field(default=None, gt=0)
-    cantidad_canastillas: Decimal | None = Field(default=None, gt=0)
+    cantidad_kg: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
+    cantidad_canastillas: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
     # Horas COMPLETAS que se va a mandar la orden a produccion. Es un entero
     # a proposito: en la planta no se programan medias horas, y el minimo es
     # una hora.
@@ -309,7 +309,7 @@ class RegistroHornoSalida(BaseModel):
 
 class RegistroReferenciaGuardar(BaseModel):
     referencia_papa_id: int = Field(gt=0)
-    cantidad_bultos: Decimal = Field(gt=0)
+    cantidad_bultos: Decimal = Field(gt=0, max_digits=6, decimal_places=2)
 
 
 class RegistroHornoGuardar(BaseModel):
@@ -321,16 +321,16 @@ class RegistroHornoGuardar(BaseModel):
     referencias: list[RegistroReferenciaGuardar] | None = None
     # Compatibilidad: clientes viejos envían una sola referencia.
     referencia_papa_id: int | None = Field(default=None, gt=0)
-    cantidad_bultos: Decimal | None = Field(default=None, gt=0)
+    cantidad_bultos: Decimal | None = Field(default=None, gt=0, max_digits=6, decimal_places=2)
     operarios_seleccion: int = Field(ge=0, le=999)
     operarios_horno: int = Field(ge=0, le=999)
-    nivel_aceite_inicial_cm: Decimal = Field(ge=0)
-    nivel_aceite_final_cm: Decimal = Field(ge=0)
-    temperatura_aceite_c: Decimal = Field(gt=0, le=400)
+    nivel_aceite_inicial_cm: Decimal = Field(ge=0, max_digits=6, decimal_places=2)
+    nivel_aceite_final_cm: Decimal = Field(ge=0, max_digits=6, decimal_places=2)
+    temperatura_aceite_c: Decimal = Field(gt=0, le=400, max_digits=5, decimal_places=2)
     observaciones: str | None = None
     # Desperdicio de la tanda (opcional).
     tipo_desperdicio_id: int | None = None
-    cantidad_desperdicio_kg: Decimal | None = Field(default=None, ge=0)
+    cantidad_desperdicio_kg: Decimal | None = Field(default=None, ge=0, max_digits=8, decimal_places=2)
     observacion_desperdicio: str | None = None
 
     @model_validator(mode="after")
@@ -349,6 +349,8 @@ class RegistroHornoGuardar(BaseModel):
             ids = [fila.referencia_papa_id for fila in self.referencias]
             if len(ids) != len(set(ids)):
                 raise ValueError("No puedes repetir una referencia en la misma tanda.")
+            if sum(fila.cantidad_bultos for fila in self.referencias) > Decimal("9999.99"):
+                raise ValueError("La suma de bultos de la tanda no puede superar 9999.99.")
         return self
 
 
@@ -382,7 +384,7 @@ class RecepcionGuardar(BaseModel):
     hora_inicio: time
     hora_fin: time
     sabor_id: int
-    cantidad_sabor_kg: Decimal = Field(gt=0)
+    cantidad_sabor_kg: Decimal = Field(gt=0, max_digits=8, decimal_places=2)
     # Peso REAL de cada canastilla, una por una. Nunca un valor asumido.
     pesos_canastillas: list[Annotated[Decimal, Field(gt=0, max_digits=6, decimal_places=2)]] = Field(
         min_length=1
