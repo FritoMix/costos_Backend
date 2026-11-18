@@ -86,3 +86,14 @@ def buscar_orden_en_horno(
     if excluir_id is not None:
         consulta = consulta.where(OrdenProduccion.id != excluir_id)
     return db.scalar(consulta)
+
+
+
+def contar_pendientes_sin_formula(db: Session, usuario: Usuario) -> int | None:
+    if usuario.rol.codigo not in (RolCodigo.ADMIN, RolCodigo.SUPERVISOR):
+        return None
+    pendientes = _consulta_ordenes(db, usuario=usuario, estado=EstadoOrden.PENDIENTE).where(
+        OrdenProduccion.formula_obligatoria.is_(True),
+        ~OrdenProduccion.referencias.any(),
+    )
+    return db.scalar(select(func.count()).select_from(pendientes.order_by(None).subquery())) or 0

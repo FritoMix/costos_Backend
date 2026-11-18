@@ -18,7 +18,7 @@ from app.modules.produccion.models import (
     RegistroHornoReferencia,
     RegistroSaborizado,
 )
-from app.modules.produccion.schemas import TotalesOrden
+from app.modules.produccion.schemas import AvanceOrden, TotalesOrden
 
 
 def producido_por_referencia(
@@ -51,6 +51,30 @@ def producido_por_referencia(
     return {referencia_id: total for referencia_id, total in db.execute(consulta).all()}
 
 
+def avance_orden(orden: OrdenProduccion, kg_recibidos: Decimal) -> AvanceOrden:
+    porcentaje = None
+    if orden.cantidad_programada and orden.cantidad_programada > 0:
+        porcentaje = (kg_recibidos / orden.cantidad_programada * 100).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+    return AvanceOrden(kg_papa_frita=kg_recibidos, avance_porcentaje=porcentaje)
+
+
+def avances_por_orden(db: Session, ordenes: list[OrdenProduccion]) -> dict[int, AvanceOrden]:
+    if not ordenes:
+        return {}
+    filas = db.execute(
+        select(RegistroSaborizado.orden_id, func.sum(RegistroSaborizado.kg_recibidos))
+        .where(
+            RegistroSaborizado.orden_id.in_([orden.id for orden in ordenes]),
+            RegistroSaborizado.eliminado.is_(False),
+        )
+        .group_by(RegistroSaborizado.orden_id)
+    )
+    recibidos = {id_orden: kg for id_orden, kg in filas}
+    return {orden.id: avance_orden(orden, recibidos.get(orden.id, Decimal("0"))) for orden in ordenes}
+
+
 def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:
     kg_crudos, bultos, kg_fritos_estimados, kg_aceite = db.execute(
         select(
@@ -73,12 +97,6 @@ def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:
         )
     ) or Decimal("0")
 
-    avance = None
-    if orden.cantidad_programada and orden.cantidad_programada > 0:
-        avance = (kg_papa_frita / orden.cantidad_programada * 100).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
-
     return TotalesOrden(
         kg_crudos=kg_crudos,
         cantidad_bultos=bultos,
@@ -86,5 +104,5 @@ def calcular_totales(db: Session, orden: OrdenProduccion) -> TotalesOrden:
         kg_papa_frita=kg_papa_frita,
         kg_aceite=kg_aceite,
         kg_desperdicio=kg_desperdicio,
-        avance_porcentaje=avance,
+        avance_porcentaje=avance_orden(orden, kg_papa_frita).avance_porcentaje,
     )

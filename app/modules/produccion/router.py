@@ -33,6 +33,8 @@ from app.modules.produccion.schemas import (
     FormulaProyeccionGuardar,
     FormulaProyeccionSalida,
     FormulaSalida,
+    InicioProduccionResumen,
+    OrdenActivaResumen,
     OrdenBodegaDetalle,
     OrdenBodegaSalida,
     OrdenDetalle,
@@ -50,6 +52,7 @@ from app.modules.produccion.servicios import horno as servicio_horno
 from app.modules.produccion.servicios import ordenes as servicio_ordenes
 from app.modules.produccion.servicios import saborizado as servicio_saborizado
 from app.modules.produccion.servicios import totales as servicio_totales
+from app.modules.produccion.servicios.consultas_ordenes import contar_pendientes_sin_formula
 
 BD = Annotated[Session, Depends(get_db)]
 SoloAdmin = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN))]
@@ -280,6 +283,21 @@ def pagina_ordenes(
 ):
     return servicio_ordenes.pagina_ordenes(
         db, usuario=usuario, pagina=pagina, tamano=tamano, estado=estado, solo_propias=solo_propias
+    )
+
+
+@router.get("/resumen-inicio", response_model=InicioProduccionResumen)
+def resumen_inicio(db: BD, usuario: VeOrdenes) -> InicioProduccionResumen:
+    ordenes = servicio_ordenes.listar_ordenes(
+        db, usuario=usuario, estado="en_produccion", solo_propias=False
+    )
+    avances = servicio_totales.avances_por_orden(db, ordenes)
+    return InicioProduccionResumen(
+        activas=[
+            OrdenActivaResumen(orden=OrdenSalida.model_validate(orden), avance=avances[orden.id])
+            for orden in ordenes
+        ],
+        pendientes_sin_formula=contar_pendientes_sin_formula(db, usuario),
     )
 
 
