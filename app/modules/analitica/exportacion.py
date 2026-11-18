@@ -13,13 +13,13 @@ completamente en memoria.
 import csv
 import io
 from collections.abc import Generator
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from openpyxl import Workbook
-from sqlalchemy import func, select
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
-from app.core.tiempo import ahora_local
+from app.core.tiempo import ZONA_HORARIA_LOCAL, ahora_local
 from app.modules.analitica.schemas import FiltrosAnalisis
 from app.modules.analitica.service import consulta_ordenes_filtradas
 from app.modules.produccion.models import (
@@ -50,12 +50,38 @@ ENCABEZADOS = [
 
 
 def obtener_filas(db: Session, filtros: FiltrosAnalisis) -> list[list]:
-    ordenes_sub = consulta_ordenes_filtradas(filtros).subquery()
+    return _filas_por_orden(db, consulta_ordenes_filtradas(filtros))
 
+
+def obtener_filas_diarias(db: Session, fecha: date) -> list[list]:
+    """Agrupa los registros creados durante el día de planta, por orden."""
+    inicio = datetime.combine(fecha, time.min, tzinfo=ZONA_HORARIA_LOCAL)
+    fin = inicio + timedelta(days=1)
+    ventana_horno = (RegistroHorno.fecha_creacion >= inicio, RegistroHorno.fecha_creacion < fin)
+    ventana_saborizado = (
+        RegistroSaborizado.fecha_creacion >= inicio,
+        RegistroSaborizado.fecha_creacion < fin,
+    )
+    actividad = union(
+        select(RegistroHorno.orden_id).where(RegistroHorno.eliminado.is_(False), *ventana_horno),
+        select(RegistroSaborizado.orden_id).where(
+            RegistroSaborizado.eliminado.is_(False), *ventana_saborizado
+        ),
+    )
+    ordenes = consulta_ordenes_filtradas(FiltrosAnalisis()).where(OrdenProduccion.id.in_(actividad))
+    filas = _filas_por_orden(
+        db, ordenes, ventana_horno=ventana_horno, ventana_saborizado=ventana_saborizado
+    )
+    encabezados = [*filas[0], "fecha_informe"]
+    encabezados[1] = "fecha_orden"
+    return [encabezados, *([*fila, fecha.isoformat()] for fila in filas[1:])]
+
+
+def _filas_por_orden(db: Session, ids_ordenes, *, ventana_horno=(), ventana_saborizado=()) -> list[list]:
     ordenes = list(
         db.scalars(
             select(OrdenProduccion)
-            .where(OrdenProduccion.id.in_(select(ordenes_sub.c.id)))
+            .where(OrdenProduccion.id.in_(ids_ordenes))
             .order_by(OrdenProduccion.fecha, OrdenProduccion.numero_orden)
         ).unique().all()
     )
@@ -75,7 +101,7 @@ def obtener_filas(db: Session, filtros: FiltrosAnalisis) -> list[list]:
                 func.coalesce(func.sum(RegistroHorno.cantidad_bultos), 0),
                 func.coalesce(func.sum(RegistroHorno.kg_aceite_consumido), 0),
             )
-            .where(RegistroHorno.orden_id.in_(orden_ids), RegistroHorno.eliminado == False)
+            .where(RegistroHorno.orden_id.in_(orden_ids), RegistroHorno.eliminado == False, *ventana_horno)
             .group_by(RegistroHorno.orden_id)
         ).all()
     }
@@ -87,7 +113,7 @@ def obtener_filas(db: Session, filtros: FiltrosAnalisis) -> list[list]:
                 func.coalesce(func.sum(Desperdicio.cantidad_kg), 0),
             )
             .join(RegistroHorno, Desperdicio.registro_horno_id == RegistroHorno.id)
-            .where(RegistroHorno.orden_id.in_(orden_ids), RegistroHorno.eliminado == False)
+            .where(RegistroHorno.orden_id.in_(orden_ids), RegistroHorno.eliminado == False, *ventana_horno)
             .group_by(RegistroHorno.orden_id)
         ).all()
     )
@@ -103,6 +129,7 @@ def obtener_filas(db: Session, filtros: FiltrosAnalisis) -> list[list]:
             .where(
                 RegistroSaborizado.orden_id.in_(orden_ids),
                 RegistroSaborizado.eliminado == False,
+                *ventana_saborizado,
             )
             .group_by(RegistroSaborizado.orden_id)
         ).all()

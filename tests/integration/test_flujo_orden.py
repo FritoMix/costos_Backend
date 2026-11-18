@@ -574,3 +574,49 @@ def test_sabor_inactivo_no_admite_nuevas_recepciones_pero_conserva_historial(
     )
     assert anterior.kg_recibidos == Decimal("13.00")
     assert len(servicio_saborizado.listar_recepciones(db, orden.id)) == 1
+
+
+def test_informe_diario_incluye_orden_anterior_y_excluye_registros_fuera_del_dia(
+    db, datos_base, orden_guardar, guardar_formula
+):
+    from datetime import UTC, date, datetime
+
+    from app.modules.analitica.exportacion import obtener_filas_diarias
+
+    fecha = date(2026, 11, 18)
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    orden.fecha = fecha - timedelta(days=1)
+    db.flush()
+    guardar_formula(orden)
+    servicio_ordenes.iniciar_orden(db, orden)
+    tanda = servicio_horno.crear_registro(
+        db, orden, _registro_horno(referencia_papa_id=datos_base.referencia_papa.id),
+        datos_base.operario_horno,
+    )
+    recepcion = servicio_saborizado.crear_recepcion(
+        db, orden, _recepcion(datos_base), datos_base.operario_saborizado,
+    )
+    medianoche = datetime(2026, 11, 18, 5, tzinfo=UTC)
+    tanda.fecha_creacion = medianoche
+    recepcion.fecha_creacion = medianoche - timedelta(seconds=1)
+    db.flush()
+
+    encabezados, fila = obtener_filas_diarias(db, fecha)
+    datos = dict(zip(encabezados, fila, strict=True))
+    assert datos["fecha_orden"] == "2026-11-17"
+    assert datos["fecha_informe"] == "2026-11-18"
+    assert datos["cantidad_bultos"] == 10
+    assert datos["kg_papa_frita"] == 0
+
+    tanda.fecha_creacion = medianoche + timedelta(days=1)
+    recepcion.fecha_creacion = medianoche
+    db.flush()
+
+    encabezados, fila = obtener_filas_diarias(db, fecha)
+    datos = dict(zip(encabezados, fila, strict=True))
+    assert datos["cantidad_bultos"] == 0
+    assert datos["kg_papa_frita"] == 11.5
+
+    recepcion.eliminado = True
+    db.flush()
+    assert obtener_filas_diarias(db, fecha) == [encabezados]
