@@ -1065,3 +1065,38 @@ def test_precision_invalida_devuelve_422_legible_sin_guardar(cliente, db, datos_
     respuesta = cliente.post(f"{API}/ordenes", json=datos)
     assert respuesta.status_code == 201
     assert Decimal(respuesta.json()["cantidad_programada"]) == Decimal("120.25")
+
+
+def test_resumen_inicio_coincide_con_detalle_y_respeta_roles(
+    cliente, db, datos_base, orden_guardar, guardar_formula
+):
+    from app.modules.produccion.servicios import ordenes
+
+    activa = ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    guardar_formula(activa)
+    ordenes.iniciar_orden(db, activa)
+    _login(cliente)
+    pendiente = ordenes.crear_orden(db, orden_guardar(), datos_base.admin)
+
+    _json(cliente.post(f"{API}/ordenes/{activa.id}/recepciones", json={
+        "hora_inicio": "07:00", "hora_fin": "08:00", "sabor_id": datos_base.sabor.id,
+        "cantidad_sabor_kg": "1.00", "pesos_canastillas": ["6.55", "5.45"],
+    }), 201)
+    detalle = _json(cliente.get(f"{API}/ordenes/{activa.id}"))
+    ruta = f"{API}/ordenes/resumen-inicio"
+    resumen = _json(cliente.get(ruta))
+    assert resumen["pendientes_sin_formula"] == 1
+    assert [item["orden"]["id"] for item in resumen["activas"]] == [activa.id]
+    avance = resumen["activas"][0]["avance"]
+    assert Decimal(avance["kg_papa_frita"]) == Decimal("12.00")
+    assert avance["avance_porcentaje"] == detalle["totales"]["avance_porcentaje"]
+
+    _login(cliente, "supervisor_prueba")
+    assert _json(cliente.get(ruta))["pendientes_sin_formula"] == 0
+    assert pendiente.supervisor_id == datos_base.admin.id
+
+    _login(cliente, "operario_horno_prueba")
+    assert _json(cliente.get(ruta))["pendientes_sin_formula"] is None
+
+    _login(cliente, "bodeguero_prueba")
+    assert cliente.get(ruta).status_code == 403

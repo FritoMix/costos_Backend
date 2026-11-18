@@ -394,6 +394,21 @@ class RecepcionGuardar(BaseModel):
 # --- Detalle completo de una orden ----------------------------------------
 
 
+class AvanceOrden(BaseModel):
+    kg_papa_frita: Decimal
+    avance_porcentaje: Decimal | None
+
+
+class OrdenActivaResumen(BaseModel):
+    orden: OrdenSalida
+    avance: AvanceOrden
+
+
+class InicioProduccionResumen(BaseModel):
+    activas: list[OrdenActivaResumen]
+    pendientes_sin_formula: int | None
+
+
 class TotalesOrden(BaseModel):
     kg_crudos: Decimal
     cantidad_bultos: Decimal
