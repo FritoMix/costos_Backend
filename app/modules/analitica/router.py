@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.limite import limiter
+from app.core.tiempo import hoy_local
 from app.db.session import get_db
 from app.modules.analitica import exportacion, service
 from app.modules.analitica.schemas import (
@@ -106,4 +107,18 @@ def exportar_excel(request: Request, db: BD, _: SoloAdmin, filtros: Filtros) -> 
         exportacion.generar_excel(filas),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+@router.get("/informe-diario.xlsx")
+@limiter.limit("10/minute")
+def informe_diario(request: Request, db: BD, _: SoloAdmin) -> StreamingResponse:
+    fecha = hoy_local()
+    filas = exportacion.obtener_filas_diarias(db, fecha)
+    return StreamingResponse(
+        exportacion.generar_excel(filas),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="datacontrol_informe_diario_{fecha}.xlsx"',
+            "Cache-Control": "no-store",
+        },
     )
