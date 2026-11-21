@@ -247,6 +247,10 @@ def test_no_se_pueden_reducir_las_horas_por_debajo_de_lo_registrado(
     )
     guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
+    # V17: la tanda n se registra cuando empieza su hora; se simula que la
+    # orden arrancó hace 3 horas para poder registrar varias seguidas.
+    orden.hora_inicio -= timedelta(hours=3)
+    db.flush()
 
     servicio_horno.crear_registro(
         db,
@@ -558,6 +562,10 @@ def test_sabor_inactivo_no_admite_nuevas_recepciones_pero_conserva_historial(
     orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
     guardar_formula(orden)
     servicio_ordenes.iniciar_orden(db, orden)
+    # V17: la tanda n se registra cuando empieza su hora; se simula que la
+    # orden arrancó hace 3 horas para poder registrar varias seguidas.
+    orden.hora_inicio -= timedelta(hours=3)
+    db.flush()
     anterior = servicio_saborizado.crear_recepcion(
         db, orden, _recepcion(datos_base), datos_base.operario_saborizado
     )

@@ -14,5 +14,6 @@
   "V6__liberar_hornos_de_ordenes_borradas.sql": "e7d150cf8175d6d1a1c2dff32a0cfcdc62a0222a0e7b894cf1271fc14c12864d",
   "V7__version_de_sesion.sql": "72eb819c733c1d6947aa560348f94be061332d9fe7eb66d0fc959f9775837c40",
   "V8__bodega_referencias_papa.sql": "15c20e08cd97491c3554d4839de2f46e7111fd6d79b8d242224e6f803b4eede3",
-  "V9__parametros_productivos_papa_horno.sql": "6ec39d403730038408917cc77e9765170be87a1e31e7b3e5d52d085c30c8352a"
+  "V9__parametros_productivos_papa_horno.sql": "6ec39d403730038408917cc77e9765170be87a1e31e7b3e5d52d085c30c8352a",
+  "V17__tandas_por_hora_y_paradas.sql": "e749a3401976203d07489a38c9a48851321639453b2622670f6a4bc6d1dcf91e"
 }

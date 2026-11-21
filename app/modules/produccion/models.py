@@ -380,6 +380,43 @@ class FormulaPapaReferencia(Base):
         )
 
 
+CAUSAS_PARADA = {
+    "falta_papa": "Falta de papa",
+    "dano_mecanico": "Daño mecánico",
+    "limpieza": "Limpieza",
+    "aceite": "Cambio o falta de aceite",
+    "falta_personal": "Falta de personal",
+    "gas_energia": "Gas o energía",
+    "otro": "Otra causa",
+}
+
+
+def texto_parada(registro) -> str | None:
+    """"Parada 20 min · Falta de papa" si el registro anoto una parada."""
+    if not registro.minutos_parada:
+        return None
+    causa = registro.nota_parada if registro.causa_parada == "otro" else None
+    causa = causa or CAUSAS_PARADA.get(registro.causa_parada or "", "sin causa")
+    return f"Parada {registro.minutos_parada} min · {causa}"
+
+
+def alertas_de_hora(registro) -> list[str]:
+    """Aviso si el registro se guardo mucho despues de terminar su hora."""
+    from datetime import timedelta
+
+    from app.core.config import settings
+
+    if registro.fecha_creacion is None or registro.hora_fin is None:
+        return []
+    tarde = registro.fecha_creacion - registro.hora_fin
+    if tarde > timedelta(minutes=settings.minutos_tolerancia_registro):
+        horas, minutos = divmod(int(tarde.total_seconds() // 60), 60)
+        demora = f"{horas} h {minutos} min" if horas else f"{minutos} min"
+        return [f"Se registró {demora} después de terminar su hora"]
+    return []
+
+
+
 class RegistroHorno(Base):
     """
     Una tanda de fritura: bultos usados, personal, niveles de aceite y,
@@ -396,6 +433,13 @@ class RegistroHorno(Base):
 
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
     usuario: Mapped["Usuario"] = relationship(foreign_keys=[usuario_id], lazy="selectin")
+
+    # Que hora de la orden es este registro: 1, 2, ... (V17).
+    numero_tanda: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # Parada dentro de la hora (V17): minutos 0-60 y causa.
+    minutos_parada: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    causa_parada: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    nota_parada: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     hora_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     hora_fin: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -462,6 +506,19 @@ class RegistroHorno(Base):
     desperdicios: Mapped[list["Desperdicio"]] = relationship(
         back_populates="registro_horno", lazy="selectin", cascade="all, delete-orphan"
     )
+
+    @property
+    def alertas(self) -> list[str]:
+        """Lo que el supervisor debe revisar de esta tanda (V17)."""
+        from app.core.config import settings
+
+        avisos = []
+        parada = texto_parada(self)
+        if parada:
+            avisos.append(parada)
+        elif self.cantidad_bultos is not None and self.cantidad_bultos < settings.bultos_minimos_tanda:
+            avisos.append(f"Solo {self.cantidad_bultos.normalize():f} bultos en la hora y no se anotó parada")
+        return avisos + alertas_de_hora(self)
 
     def __repr__(self) -> str:
         return f"<RegistroHorno {self.id} orden={self.orden_id}>"
@@ -567,6 +624,13 @@ class RegistroSaborizado(Base):
     turno_id: Mapped[int] = mapped_column(ForeignKey("turnos.id"))
     turno: Mapped["Turno"] = relationship(lazy="selectin")
 
+    # Que hora de la orden es este registro: 1, 2, ... (V17).
+    numero_tanda: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # Parada dentro de la hora (V17): minutos 0-60 y causa.
+    minutos_parada: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    causa_parada: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    nota_parada: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
     hora_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     hora_fin: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -593,6 +657,10 @@ class RegistroSaborizado(Base):
         lazy="selectin",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def alertas(self) -> list[str]:
+        return alertas_de_hora(self)
 
     def __repr__(self) -> str:
         return f"<RegistroSaborizado {self.id} orden={self.orden_id}>"

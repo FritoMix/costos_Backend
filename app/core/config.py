@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "clave-de-desarrollo-cambiar-en-produccion"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
+
+    # Registro por hora (V17): bajo este numero de bultos sin parada anotada
+    # la tanda queda con alerta; y un registro guardado mas de estos minutos
+    # despues de terminar su hora tambien.
+    bultos_minimos_tanda: int = Field(default=30, ge=0, le=999)
+    minutos_tolerancia_registro: int = Field(default=60, ge=0, le=24 * 60)
     session_idle_minutes: int = Field(default=30, ge=1, le=480)
     login_account_attempts: int = Field(default=5, ge=2, le=100)
     login_ip_attempts: int = Field(default=20, ge=5, le=500)

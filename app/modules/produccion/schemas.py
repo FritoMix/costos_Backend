@@ -4,7 +4,7 @@ Contratos de entrada y salida del modulo Produccion.
 
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -276,13 +276,24 @@ class RegistroReferenciaSalida(BaseModel):
     kg_fritos_estimados: Decimal | None
 
 
+# Causas de parada dentro de la hora (V17).
+CausaParada = Literal[
+    "falta_papa", "dano_mecanico", "limpieza", "aceite", "falta_personal", "gas_energia", "otro"
+]
+
+
 class RegistroHornoSalida(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     orden_id: int
+    # Que hora de la orden es esta tanda: 1, 2, ... (V17).
+    numero_tanda: int | None = None
     hora_inicio: datetime
     hora_fin: datetime
+    minutos_parada: int = 0
+    causa_parada: str | None = None
+    nota_parada: str | None = None
     referencia_papa: ReferenciaPapaRef | None
     referencias: list[RegistroReferenciaSalida] = []
     cantidad_bultos: Decimal
@@ -305,6 +316,8 @@ class RegistroHornoSalida(BaseModel):
     fecha_creacion: datetime
     usuario: UsuarioRef
     desperdicios: list[DesperdicioSalida]
+    # Avisos para el supervisor: parada, pocos bultos, registro tardío.
+    alertas: list[str] = []
 
 
 class RegistroReferenciaGuardar(BaseModel):
@@ -313,10 +326,16 @@ class RegistroReferenciaGuardar(BaseModel):
 
 
 class RegistroHornoGuardar(BaseModel):
-    # Solo la hora del reloj: la fecha la pone la app (es la de la orden) y
-    # el usuario sale del token. Al operario no se le pide ni una ni otro.
-    hora_inicio: time
-    hora_fin: time
+    # Cada hora programada es una tanda (V17). Si la orden tiene hora de
+    # inicio, la hora de la tanda la pone la app y estas se ignoran; solo
+    # las ordenes antiguas sin hora de inicio la siguen pidiendo.
+    numero_tanda: int | None = Field(default=None, ge=1, le=24)
+    hora_inicio: time | None = None
+    hora_fin: time | None = None
+    # Parada dentro de la hora: minutos y causa (V17).
+    minutos_parada: int = Field(default=0, ge=0, le=60)
+    causa_parada: CausaParada | None = None
+    nota_parada: str | None = Field(default=None, max_length=300)
     # Formato nuevo: una o varias referencias por tanda.
     referencias: list[RegistroReferenciaGuardar] | None = None
     # Compatibilidad: clientes viejos envían una sola referencia.
@@ -369,6 +388,7 @@ class RecepcionSalida(BaseModel):
 
     id: int
     orden_id: int
+    numero_tanda: int | None = None
     hora_inicio: datetime
     hora_fin: datetime
     cantidad_sabor_kg: Decimal
@@ -378,11 +398,18 @@ class RecepcionSalida(BaseModel):
     turno: Referencia
     usuario: UsuarioRef
     canastillas: list[CanastillaSalida]
+    # La parada la reporta el horno; las recepciones viejas pueden traer la suya.
+    minutos_parada: int = 0
+    causa_parada: str | None = None
+    nota_parada: str | None = None
+    alertas: list[str] = []
 
 
 class RecepcionGuardar(BaseModel):
-    hora_inicio: time
-    hora_fin: time
+    # Una recepcion por hora programada, como el horno (V17).
+    numero_tanda: int | None = Field(default=None, ge=1, le=24)
+    hora_inicio: time | None = None
+    hora_fin: time | None = None
     sabor_id: int
     cantidad_sabor_kg: Decimal = Field(gt=0, max_digits=8, decimal_places=2)
     # Peso REAL de cada canastilla, una por una. Nunca un valor asumido.

@@ -53,7 +53,9 @@ def test_actualizar_desde_v14_preserva_datos_y_detecta_cambio_historico(motor_va
     for archivo in ORIGEN.glob("V*.sql"):
         shutil.copy2(archivo, tmp_path / archivo.name)
     manifiesto(tmp_path)
-    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 2
+    # Todas las migraciones posteriores a V14 (V15, V16 y las que vengan).
+    posteriores = [a for a in ORIGEN.glob("V*.sql") if int(a.name.split("__")[0][1:]) > 14]
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == len(posteriores)
     with motor_vacio.connect() as c:
         assert c.scalar(text("SELECT count(*) FROM usuarios WHERE nombre_usuario='historico'")) == 1
         assert c.scalar(text("SELECT count(*) FROM esquema_migraciones WHERE checksum_sha256 IS NULL")) == 0
