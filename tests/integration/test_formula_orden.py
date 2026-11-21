@@ -5,7 +5,7 @@ Cubren el ciclo Bodega → Horno contra PostgreSQL: guardado, reemplazo,
 congelado, bandeja restringida, tandas multi-referencia y límites físicos.
 """
 
-from datetime import time
+from datetime import time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -433,6 +433,10 @@ def test_la_tanda_no_supera_el_restante_planificado(
         db, orden, _formula((datos_base.referencia_papa, 10)), datos_base.bodeguero
     )
     servicio_ordenes.iniciar_orden(db, orden)
+    # V17: la tanda n se registra cuando empieza su hora; se simula que la
+    # orden arrancó hace 3 horas para poder registrar varias seguidas.
+    orden.hora_inicio -= timedelta(hours=3)
+    db.flush()
 
     servicio_horno.crear_registro(
         db,
@@ -504,6 +508,10 @@ def test_una_orden_de_n_horas_no_admite_la_tanda_n_mas_uno(
     # conteo de tandas y no por bultos restantes.
     guardar_formula(orden, bultos_por_tanda=30)
     servicio_ordenes.iniciar_orden(db, orden)
+    # V17: la tanda n se registra cuando empieza su hora; se simula que la
+    # orden arrancó hace 3 horas para poder registrar varias seguidas.
+    orden.hora_inicio -= timedelta(hours=3)
+    db.flush()
 
     servicio_horno.crear_registro(
         db,
@@ -518,7 +526,8 @@ def test_una_orden_de_n_horas_no_admite_la_tanda_n_mas_uno(
         datos_base.operario_horno,
     )
 
-    with pytest.raises(ErrorDeValidacion, match="ya registró 2 tandas"):
+    # V17: las 2 horas ya tienen tanda; la tercera se rechaza antes de mirar el horario.
+    with pytest.raises(ErrorDeValidacion, match="ya están registradas sus 2 tandas"):
         servicio_horno.crear_registro(
             db,
             orden,

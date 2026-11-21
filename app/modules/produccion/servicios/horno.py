@@ -20,7 +20,7 @@ Si falta la calibracion del tanque o la densidad, esas columnas quedan
 vacias: el registro se guarda igual y no se inventa ningun valor.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
@@ -28,7 +28,6 @@ from sqlalchemy.orm import Session
 
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
-from app.core.tiempo import combinar_fecha_y_hora
 from app.db.auditoria import registrar, snapshot
 from app.db.transacciones import atomica
 from app.modules.bodega.service import obtener as obtener_referencia_papa
@@ -53,6 +52,13 @@ from app.modules.produccion.models import (
 )
 from app.modules.produccion.schemas import RegistroHornoGuardar
 from app.modules.produccion.servicios.registros import bloquear_orden
+from app.modules.produccion.servicios.tandas import (
+    aplicar_parada,
+    elegir_numero_tanda,
+    exigir_hora_empezada,
+    franja_de_tanda,
+    horario_del_registro,
+)
 from app.modules.produccion.servicios.totales import producido_por_referencia
 
 CENTAVOS = Decimal("0.01")
@@ -238,7 +244,11 @@ def _validar_capacidad_tanda(orden: OrdenProduccion, total_bultos: Decimal) -> N
 
 
 def _aplicar_datos(
-    db: Session, registro: RegistroHorno, orden: OrdenProduccion, datos: RegistroHornoGuardar
+    db: Session,
+    registro: RegistroHorno,
+    orden: OrdenProduccion,
+    datos: RegistroHornoGuardar,
+    franja: tuple[datetime, datetime] | None = None,
 ) -> None:
     mezcla = _mezcla_solicitada(datos)
     total_bultos = sum((bultos for _, bultos in mezcla), Decimal("0"))
@@ -254,7 +264,9 @@ def _aplicar_datos(
     _validar_niveles_aceite(datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm)
     diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
     litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(db, orden.horno, orden.fecha, diferencia)
-    inicio, fin = combinar_fecha_y_hora(orden.fecha, datos.hora_inicio, datos.hora_fin)
+    # La hora la pone la app segun el numero de tanda (V17); solo las ordenes
+    # antiguas sin hora de inicio usan la que se digito.
+    inicio, fin = horario_del_registro(orden, franja, datos)
     validar_duracion_tanda(inicio=inicio, fin=fin)
     validar_ventana_registro(
         horas_produccion=orden.horas_produccion,
@@ -303,6 +315,7 @@ def _aplicar_datos(
     registro.densidad_aceite_usada = densidad
     registro.kg_aceite_consumido = kg_aceite
     registro.observaciones = (datos.observaciones or "").strip() or None
+    aplicar_parada(registro, datos)
 
     # El detalle por referencia se reemplaza completo (sirve para crear y
     # para corregir una tanda). Se elimina primero y se hace flush para no
@@ -334,9 +347,13 @@ def crear_registro(
             "Solo se pueden registrar datos de horno para una orden que esté En producción."
         )
 
-    registro = RegistroHorno(orden_id=orden.id, usuario_id=usuario.id)
+    numero = elegir_numero_tanda(db, orden, datos.numero_tanda, RegistroHorno)
+    franja = franja_de_tanda(orden, numero)
+    exigir_hora_empezada(franja, "tanda", numero)
+
+    registro = RegistroHorno(orden_id=orden.id, usuario_id=usuario.id, numero_tanda=numero)
     registro.orden = orden
-    _aplicar_datos(db, registro, orden, datos)
+    _aplicar_datos(db, registro, orden, datos, franja)
     db.add(registro)
     db.flush()
     db.refresh(registro)
@@ -367,7 +384,9 @@ def editar_registro(
             "Solo se puede editar un registro de horno mientras la orden esté En producción."
         )
     _verificar_autoria(registro, usuario)
-    _aplicar_datos(db, registro, registro.orden, datos)
+    # Al corregir, la tanda conserva su hora: no se cambia de numero.
+    franja = franja_de_tanda(registro.orden, registro.numero_tanda)
+    _aplicar_datos(db, registro, registro.orden, datos, franja)
     db.flush()
     db.refresh(registro)
     registrar(db, "horno", registro.id, "editar", usuario.id, antes, snapshot(registro))

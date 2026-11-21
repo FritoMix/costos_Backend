@@ -6,6 +6,7 @@ las canastillas UNA POR UNA: los kg recibidos son la suma de esos pesos
 reales, nunca un estimado. El turno se detecta solo a partir de la hora.
 """
 
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
-from app.core.tiempo import combinar_fecha_y_hora
+from app.core.tiempo import ZONA_HORARIA_LOCAL
 from app.db.auditoria import registrar, snapshot
 from app.db.transacciones import atomica
 from app.modules.catalogos.models import Sabor
@@ -28,6 +29,12 @@ from app.modules.produccion.models import (
 )
 from app.modules.produccion.schemas import RecepcionGuardar
 from app.modules.produccion.servicios.registros import bloquear_orden
+from app.modules.produccion.servicios.tandas import (
+    elegir_numero_tanda,
+    exigir_hora_empezada,
+    franja_de_tanda,
+    horario_del_registro,
+)
 
 
 def listar_recepciones(db: Session, orden_id: int) -> list[RegistroSaborizado]:
@@ -53,7 +60,11 @@ def obtener_recepcion(db: Session, recepcion_id: int) -> RegistroSaborizado:
 
 
 def _aplicar_datos(
-    db: Session, recepcion: RegistroSaborizado, orden: OrdenProduccion, datos: RecepcionGuardar
+    db: Session,
+    recepcion: RegistroSaborizado,
+    orden: OrdenProduccion,
+    datos: RecepcionGuardar,
+    franja: tuple[datetime, datetime] | None = None,
 ) -> None:
     sabor = db.get(Sabor, datos.sabor_id)
     if sabor is None:
@@ -65,8 +76,10 @@ def _aplicar_datos(
     if not pesos:
         raise ErrorDeValidacion("Debes registrar el peso real de al menos una canastilla.")
 
-    turno = detectar_turno_por_hora(db, datos.hora_inicio)
-    inicio, fin = combinar_fecha_y_hora(orden.fecha, datos.hora_inicio, datos.hora_fin)
+    # La hora la pone la app segun el numero de recepcion (V17); el turno
+    # sale del inicio de esa hora.
+    inicio, fin = horario_del_registro(orden, franja, datos)
+    turno = detectar_turno_por_hora(db, inicio.astimezone(ZONA_HORARIA_LOCAL).time())
     validar_ventana_registro(
         horas_produccion=orden.horas_produccion,
         inicio=inicio,
@@ -97,9 +110,15 @@ def crear_recepcion(
     if orden.estado != EstadoOrden.EN_PRODUCCION:
         raise ErrorDeValidacion("Solo se pueden registrar recepciones para una orden que esté En producción.")
 
-    recepcion = RegistroSaborizado(orden_id=orden.id, usuario_id=usuario.id)
+    numero = elegir_numero_tanda(
+        db, orden, datos.numero_tanda, RegistroSaborizado, "recepción", "recepciones"
+    )
+    franja = franja_de_tanda(orden, numero)
+    exigir_hora_empezada(franja, "recepción", numero)
+
+    recepcion = RegistroSaborizado(orden_id=orden.id, usuario_id=usuario.id, numero_tanda=numero)
     recepcion.orden = orden
-    _aplicar_datos(db, recepcion, orden, datos)
+    _aplicar_datos(db, recepcion, orden, datos, franja)
     db.add(recepcion)
     db.flush()
     db.refresh(recepcion)
@@ -121,7 +140,8 @@ def editar_recepcion(
     if usuario.rol.codigo != RolCodigo.ADMIN and recepcion.usuario_id != usuario.id:
         raise ErrorDeValidacion("Solo puedes corregir las recepciones que tú mismo guardaste.")
 
-    _aplicar_datos(db, recepcion, recepcion.orden, datos)
+    franja = franja_de_tanda(recepcion.orden, recepcion.numero_tanda)
+    _aplicar_datos(db, recepcion, recepcion.orden, datos, franja)
     db.flush()
     db.refresh(recepcion)
     registrar(db, "saborizado", recepcion.id, "editar", usuario.id, antes, snapshot(recepcion))

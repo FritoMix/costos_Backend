@@ -747,20 +747,20 @@ def test_los_registros_no_superan_las_horas_de_la_orden(cliente: TestClient, dat
         201,
     )
 
-    # El mismo horario es un duplicado, aunque la orden tuviera mas horas.
+    # V17: la orden de 1 hora tiene una sola tanda. Otra (aunque se digite
+    # otro horario) es un duplicado: la hora la pone la app y se corrige.
     duplicada = cliente.post(
         f"{API}/ordenes/{orden_id}/registros-horno", json=datos_horno
     )
     assert duplicada.status_code == 400, duplicada.text
-    assert "se cruza" in duplicada.json()["detail"]
+    assert "ya está registrada" in duplicada.json()["detail"]
 
-    # Otra hora seguida ya excede la unica hora programada.
     excedida = cliente.post(
         f"{API}/ordenes/{orden_id}/registros-horno",
         json={**datos_horno, "hora_inicio": "07:00:00", "hora_fin": "08:00:00"},
     )
     assert excedida.status_code == 400, excedida.text
-    assert "Solo quedan 0 min" in excedida.json()["detail"]
+    assert "ya está registrada" in excedida.json()["detail"]
 
     # Corregir la tanda existente no se bloquea a si misma.
     _json(
@@ -786,14 +786,14 @@ def test_los_registros_no_superan_las_horas_de_la_orden(cliente: TestClient, dat
         f"{API}/ordenes/{orden_id}/recepciones", json=datos_recepcion
     )
     assert recepcion_duplicada.status_code == 400, recepcion_duplicada.text
-    assert "se cruza" in recepcion_duplicada.json()["detail"]
+    assert "ya está registrada" in recepcion_duplicada.json()["detail"]
 
     recepcion_excedida = cliente.post(
         f"{API}/ordenes/{orden_id}/recepciones",
         json={**datos_recepcion, "hora_inicio": "08:00:00", "hora_fin": "09:00:00"},
     )
     assert recepcion_excedida.status_code == 400, recepcion_excedida.text
-    assert "Solo quedan 0 min" in recepcion_excedida.json()["detail"]
+    assert "ya está registrada" in recepcion_excedida.json()["detail"]
 
     # El borrado suave libera el tiempo para volver a registrar.
     assert (
