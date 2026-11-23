@@ -26,6 +26,8 @@ from app.modules.catalogos.schemas import (
     MuestraDensidadSalida,
     ProductoGuardar,
     ProductoSalida,
+    TipoAceiteGuardar,
+    TipoAceiteSalida,
     TurnoGuardar,
     TurnoSalida,
 )
@@ -237,3 +239,26 @@ def densidades_vigentes(db: BD, _: SoloAdmin):
 )
 def registrar_muestra(datos: MuestraDensidadCrear, db: BD, admin: SoloAdmin):
     return service.registrar_muestra_densidad(db, datos, admin.id)
+
+
+# --- Tipos de aceite (V18) ---------------------------------------------------
+
+
+@router.get("/aceites", response_model=list[TipoAceiteSalida])
+def listar_aceites(db: BD, _: VeCatalogos, solo_activos: bool = False):
+    return service.listar_aceites(db, solo_activos)
+
+
+@router.post("/aceites", response_model=TipoAceiteSalida, status_code=status.HTTP_201_CREATED)
+def crear_aceite(datos: TipoAceiteGuardar, db: BD, _: SoloAdmin):
+    return service.crear_aceite(db, datos)
+
+
+@router.put("/aceites/{aceite_id}", response_model=TipoAceiteSalida)
+def actualizar_aceite(aceite_id: int, datos: TipoAceiteGuardar, db: BD, _: SoloAdmin):
+    return service.actualizar_aceite(db, aceite_id, datos)
+
+
+@router.delete("/aceites/{aceite_id}", status_code=status.HTTP_204_NO_CONTENT)
+def eliminar_aceite(aceite_id: int, db: BD, _: SoloAdmin) -> None:
+    service.eliminar_aceite(db, aceite_id)

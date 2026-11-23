@@ -15,5 +15,6 @@
   "V7__version_de_sesion.sql": "72eb819c733c1d6947aa560348f94be061332d9fe7eb66d0fc959f9775837c40",
   "V8__bodega_referencias_papa.sql": "15c20e08cd97491c3554d4839de2f46e7111fd6d79b8d242224e6f803b4eede3",
   "V9__parametros_productivos_papa_horno.sql": "6ec39d403730038408917cc77e9765170be87a1e31e7b3e5d52d085c30c8352a",
-  "V17__tandas_por_hora_y_paradas.sql": "e749a3401976203d07489a38c9a48851321639453b2622670f6a4bc6d1dcf91e"
+  "V17__tandas_por_hora_y_paradas.sql": "e749a3401976203d07489a38c9a48851321639453b2622670f6a4bc6d1dcf91e",
+  "V18__aceite_agregado_y_tipos_de_aceite.sql": "c4d41965f20102d163abf7e0eaf23138e90cbb03d3855038545303414c6d6734"
 }

@@ -435,6 +435,12 @@ class RegistroHorno(Base):
     usuario: Mapped["Usuario"] = relationship(foreign_keys=[usuario_id], lazy="selectin")
 
     # Que hora de la orden es este registro: 1, 2, ... (V17).
+    # Litros agregados al tanque en la tanda y aceite del horno (V18).
+    aceite_agregado_litros: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0"), server_default="0"
+    )
+    aceite_id: Mapped[int | None] = mapped_column(ForeignKey("tipos_aceite.id"), nullable=True)
+
     numero_tanda: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     # Parada dentro de la hora (V17): minutos 0-60 y causa.
     minutos_parada: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")

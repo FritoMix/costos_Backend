@@ -64,11 +64,22 @@ from app.modules.produccion.servicios.totales import producido_por_referencia
 CENTAVOS = Decimal("0.01")
 
 
+MENSAJE_ACEITE_NEGATIVO = (
+    "Con estas medidas el consumo de aceite da negativo. Revisa los niveles "
+    "y los litros agregados al tanque."
+)
+
+
 def calcular_aceite(
-    db: Session, horno: Horno, fecha: date, diferencia_cm: Decimal
+    db: Session,
+    horno: Horno,
+    fecha: date,
+    diferencia_cm: Decimal,
+    agregado_litros: Decimal = Decimal("0"),
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
     """
-    Convierte cm -> litros -> kg.
+    Convierte cm -> litros -> kg, sumando los litros agregados al tanque
+    durante la tanda (V18). Nunca deja un consumo negativo.
 
     Devuelve (litros_por_cm_usado, volumen_litros, densidad_usada, kg).
     Los valores usados se guardan en el registro para que un cambio futuro
@@ -78,7 +89,11 @@ def calcular_aceite(
     if litros_por_cm is None:
         return None, None, None, None
 
-    volumen = (diferencia_cm * litros_por_cm).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    volumen = (diferencia_cm * litros_por_cm + agregado_litros).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    if volumen < 0:
+        raise ErrorDeValidacion(MENSAJE_ACEITE_NEGATIVO)
 
     densidad = obtener_densidad_vigente(db, horno.id, fecha)
     if densidad is None:
@@ -121,16 +136,17 @@ def _validar_desperdicio(db: Session, datos: RegistroHornoGuardar) -> bool:
     return True
 
 
-def _validar_niveles_aceite(inicial: Decimal, final: Decimal) -> None:
+def _validar_niveles_aceite(inicial: Decimal, final: Decimal, agregado: Decimal = Decimal("0")) -> None:
     """
     El nivel final no puede superar al inicial: significaria un consumo
     negativo y sesgaria los indicadores de toda la planta. Si en la planta
-    rellenaron el tanque durante la tanda, hay que corregir las medidas.
+    rellenaron el tanque durante la tanda, se indican los litros agregados
+    (V18) y el consumo total se revisa en calcular_aceite.
     """
-    if final > inicial:
+    if final > inicial and agregado <= 0:
         raise ErrorDeValidacion(
             "El nivel final del aceite no puede ser mayor que el inicial. "
-            "Si se rellenó el tanque durante la tanda, corrige las medidas antes de guardar."
+            "Si se agregó aceite al tanque durante la tanda, indica cuántos litros."
         )
 
 
@@ -261,9 +277,13 @@ def _aplicar_datos(
         filas = _filas_desde_catalogo(db, registro, mezcla)
     _validar_capacidad_tanda(orden, total_bultos)
 
-    _validar_niveles_aceite(datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm)
+    _validar_niveles_aceite(
+        datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm, datos.aceite_agregado_litros
+    )
     diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
-    litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(db, orden.horno, orden.fecha, diferencia)
+    litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
+        db, orden.horno, orden.fecha, diferencia, datos.aceite_agregado_litros
+    )
     # La hora la pone la app segun el numero de tanda (V17); solo las ordenes
     # antiguas sin hora de inicio usan la que se digito.
     inicio, fin = horario_del_registro(orden, franja, datos)
@@ -308,6 +328,8 @@ def _aplicar_datos(
     registro.operarios_horno = datos.operarios_horno
     registro.nivel_aceite_inicial_cm = datos.nivel_aceite_inicial_cm
     registro.nivel_aceite_final_cm = datos.nivel_aceite_final_cm
+    registro.aceite_agregado_litros = datos.aceite_agregado_litros
+    registro.aceite_id = orden.horno.aceite_id
     registro.diferencia_aceite_cm = diferencia
     registro.temperatura_aceite_c = datos.temperatura_aceite_c
     registro.litros_por_cm_usado = litros_por_cm

@@ -68,6 +68,21 @@ class Turno(Base):
         return f"<Turno {self.nombre}>"
 
 
+class TipoAceite(Base):
+    """Aceite de fritura con su densidad fija (kg/L) y su proveedor (V18)."""
+
+    __tablename__ = "tipos_aceite"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(String(100), unique=True)
+    densidad_kg_por_litro: Mapped[Decimal] = mapped_column(Numeric(6, 4))
+    proveedor: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    def __repr__(self) -> str:
+        return f"<TipoAceite {self.nombre}>"
+
+
 class Horno(Base):
     __tablename__ = "hornos"
 
@@ -77,6 +92,11 @@ class Horno(Base):
 
     # Informativo, para trazabilidad: que aceite usa este horno (ej: "LS").
     tipo_aceite: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Aceite del catalogo (V18). Su densidad solo se usa si el horno no
+    # tiene muestras de densidad.
+    aceite_id: Mapped[int | None] = mapped_column(ForeignKey("tipos_aceite.id"), nullable=True)
+    aceite: Mapped["TipoAceite | None"] = relationship(lazy="selectin")
 
     # Cuantos bultos de papa cruda puede procesar en una hora. Se usa para
     # proyectar la distribucion entre referencias; NULL en hornos historicos

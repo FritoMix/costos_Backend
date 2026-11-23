@@ -21,6 +21,7 @@ from app.modules.catalogos.models import (
     MuestraDensidadAceite,
     Producto,
     Sabor,
+    TipoAceite,
     TipoDesperdicio,
     Turno,
     horno_categoria,
@@ -31,6 +32,7 @@ from app.modules.catalogos.schemas import (
     HornoGuardar,
     MuestraDensidadCrear,
     ProductoGuardar,
+    TipoAceiteGuardar,
     TurnoGuardar,
 )
 
@@ -286,6 +288,12 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
     horno.nombre = datos.nombre.strip()
     horno.activo = datos.activo
     horno.tipo_aceite = (datos.tipo_aceite or "").strip() or None
+    if "aceite_id" in datos.model_fields_set:
+        if datos.aceite_id is not None:
+            aceite = _obtener(db, TipoAceite, datos.aceite_id, "Ese aceite")
+            if not aceite.activo and aceite.id != horno.aceite_id:
+                raise ErrorDeValidacion(f'El aceite "{aceite.nombre}" está desactivado.')
+        horno.aceite_id = datos.aceite_id
     horno.apto_exportacion = datos.apto_exportacion
     horno.tanque_diametro_cm = datos.tanque_diametro_cm
     horno.litros_por_cm_manual = datos.litros_por_cm_manual
@@ -469,8 +477,9 @@ def registrar_muestra_densidad(
 def obtener_densidad_vigente(db: Session, horno_id: int, fecha: date) -> Decimal | None:
     """
     Muestra de densidad mas reciente de ese horno con fecha igual o
-    anterior a la del registro. None si todavia no hay ninguna: en ese
-    caso no se calculan los kg de aceite, pero el registro se guarda igual.
+    anterior a la del registro. Si no hay ninguna, la densidad del aceite
+    del catalogo que tenga asignado el horno (V18). None si no hay ni una
+    ni otra: no se calculan los kg de aceite, pero el registro se guarda.
     """
     muestra = db.scalar(
         select(MuestraDensidadAceite)
@@ -481,7 +490,12 @@ def obtener_densidad_vigente(db: Session, horno_id: int, fecha: date) -> Decimal
         .order_by(MuestraDensidadAceite.fecha.desc(), MuestraDensidadAceite.id.desc())
         .limit(1)
     )
-    return muestra.densidad_kg_por_litro if muestra else None
+    if muestra is not None:
+        return muestra.densidad_kg_por_litro
+    horno = db.get(Horno, horno_id)
+    if horno is not None and horno.aceite is not None:
+        return horno.aceite.densidad_kg_por_litro
+    return None
 
 
 def obtener_densidades_vigentes_todos_hornos(
@@ -524,3 +538,56 @@ def obtener_densidades_vigentes_todos_hornos(
         )
     return resultado
 
+
+
+# --- Tipos de aceite (V18) ---------------------------------------------------
+
+
+def listar_aceites(db: Session, solo_activos: bool = False) -> list[TipoAceite]:
+    consulta = select(TipoAceite).order_by(TipoAceite.nombre)
+    if solo_activos:
+        consulta = consulta.where(TipoAceite.activo == True)  # noqa: E712
+    return list(db.scalars(consulta).all())
+
+
+def crear_aceite(db: Session, datos: TipoAceiteGuardar) -> TipoAceite:
+    nombre = datos.nombre.strip()
+    _nombre_libre(db, TipoAceite, TipoAceite.nombre, nombre, None)
+    aceite = TipoAceite(nombre=nombre)
+    _aplicar_aceite(aceite, datos)
+    db.add(aceite)
+    db.commit()
+    db.refresh(aceite)
+    return aceite
+
+
+def actualizar_aceite(db: Session, aceite_id: int, datos: TipoAceiteGuardar) -> TipoAceite:
+    aceite = _obtener(db, TipoAceite, aceite_id, "Ese aceite")
+    nombre = datos.nombre.strip()
+    _nombre_libre(db, TipoAceite, TipoAceite.nombre, nombre, aceite_id)
+    aceite.nombre = nombre
+    _aplicar_aceite(aceite, datos)
+    db.commit()
+    db.refresh(aceite)
+    return aceite
+
+
+def eliminar_aceite(db: Session, aceite_id: int) -> None:
+    from app.modules.produccion.models import RegistroHorno
+
+    aceite = _obtener(db, TipoAceite, aceite_id, "Ese aceite")
+    if _existe(db, select(Horno.id).where(Horno.aceite_id == aceite_id)) or _existe(
+        db, select(RegistroHorno.id).where(RegistroHorno.aceite_id == aceite_id)
+    ):
+        raise ErrorDeValidacion(
+            f'No se puede eliminar "{aceite.nombre}": un horno lo usa o ya hay tandas con él. '
+            "Puedes desactivarlo en su lugar."
+        )
+    db.delete(aceite)
+    db.commit()
+
+
+def _aplicar_aceite(aceite: TipoAceite, datos: TipoAceiteGuardar) -> None:
+    aceite.densidad_kg_por_litro = datos.densidad_kg_por_litro
+    aceite.proveedor = (datos.proveedor or "").strip() or None
+    aceite.activo = datos.activo
