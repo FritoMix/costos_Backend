@@ -17,7 +17,8 @@ from app.db.base import Base
 class TipoNotificacion:
     """Motivos por los que la app avisa. Deben coincidir con el CHECK de la tabla."""
 
-    # Historico: lo generaban las ordenes antes de la formula por orden.
+    # "Nueva orden" para todo el personal (vuelve a usarse: en la noche no
+    # hay Bodega que reciba el aviso de formula pendiente).
     ORDEN_CREADA = "orden_creada"
     PRODUCCION_POR_TERMINAR = "produccion_por_terminar"
     # Flujo nuevo: la orden nace pendiente de formula y Bodega la define.

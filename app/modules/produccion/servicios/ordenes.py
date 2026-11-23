@@ -87,6 +87,8 @@ def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenP
         notificaciones.avisar_formula_lista(db, orden)
     else:
         notificaciones.avisar_orden_para_bodega(db, orden)
+    # Todo el personal se entera de la orden nueva (en la noche no hay Bodega).
+    notificaciones.avisar_orden_creada(db, orden, formula_lista=bool(aplicada))
     db.flush()
     db.refresh(orden)
 

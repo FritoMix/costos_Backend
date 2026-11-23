@@ -4,8 +4,8 @@ Logica del modulo Notificaciones.
 Dos avisos, ambos pensados para que el operario no tenga que estar
 mirando la pantalla:
 
-  1) "Nueva orden": apenas el supervisor crea la orden, les llega a los
-     operarios de horno y saborizado.
+  1) "Nueva orden": apenas el supervisor crea la orden, le llega a todo el
+     personal (en la noche no hay Bodega que la reciba).
   2) "Faltan 15 minutos": cuando la orden entra en produccion se calcula
      el final (hora de inicio + horas programadas) y se deja el aviso
      guardado con fecha futura. La API lo entrega cuando llega su hora,
@@ -223,27 +223,56 @@ def avisar_formula_lista(db: Session, orden) -> None:
 
 
 @atomica
-def avisar_orden_creada(db: Session, orden) -> None:
-    """Aviso inmediato a los operarios: hay una orden nueva que trabajar."""
-    operarios = _destinatarios_operarios(db)
-    if not operarios:
-        return
+def avisar_orden_creada(db: Session, orden, *, formula_lista: bool) -> int:
+    """
+    "Nueva orden" para todo el personal activo, cada rol con lo que le toca.
+
+    En la noche no hay bodeguera: si el aviso solo le llegara a Bodega, nadie
+    en planta se enteraria de la orden. No se repite el aviso a quien ya
+    recibe el suyo por el flujo de la formula (Bodega cuando falta la
+    formula; Horno y el supervisor de la orden cuando ya quedo lista), ni a
+    quien creo la orden. Devuelve cuantos avisos se crearon.
+    """
+    ya_avisados: set[int] = {orden.supervisor_id}
+    if formula_lista:
+        ya_avisados |= {u.id for u in _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO])}
+    else:
+        ya_avisados |= {u.id for u in _destinatarios_bodega(db)}
 
     horas = orden.horas_produccion
-    duracion = f" · {horas} {'hora' if horas == 1 else 'horas'} de producción" if horas else ""
-
-    _crear_para(
-        db,
-        usuarios=operarios,
-        tipo=TipoNotificacion.ORDEN_CREADA,
-        titulo=f"Nueva orden {orden.numero_orden}",
-        mensaje=(
-            f"{orden.producto.nombre_comercial} en {orden.horno.nombre}{duracion}. "
-            f"Meta: {orden.cantidad_programada} kg."
-        ),
-        orden_id=orden.id,
+    duracion = f" · {horas} {'hora' if horas == 1 else 'horas'}" if horas else ""
+    base = (
+        f"{orden.producto.nombre_comercial} en {orden.horno.nombre}{duracion}. "
+        f"Meta: {orden.cantidad_programada} kg."
     )
+    if formula_lista:
+        estado = "La fórmula ya quedó lista: se puede producir."
+    else:
+        estado = "Pendiente de la fórmula de Bodega antes de producir."
+
+    tareas = {
+        RolCodigo.OPERARIO_HORNO: "Alista el horno.",
+        RolCodigo.OPERARIO_SABORIZADO: "Alista el saborizado.",
+        RolCodigo.BODEGUERO: "Revisa la papa para esta orden.",
+        RolCodigo.SUPERVISOR: "Para tu seguimiento.",
+        RolCodigo.ADMIN: "Para tu seguimiento.",
+    }
+    creados = 0
+    for rol, tarea in tareas.items():
+        usuarios = [u for u in _destinatarios_por_rol(db, [rol]) if u.id not in ya_avisados]
+        if not usuarios:
+            continue
+        ya_avisados |= {u.id for u in usuarios}
+        creados += _crear_para(
+            db,
+            usuarios=usuarios,
+            tipo=TipoNotificacion.ORDEN_CREADA,
+            titulo=f"Nueva orden {orden.numero_orden}",
+            mensaje=f"{base} {estado} {tarea}",
+            orden_id=orden.id,
+        )
     db.flush()
+    return creados
 
 
 @atomica
