@@ -384,7 +384,9 @@ def calcular_indicadores_por_categoria(
     return resultado
 
 
-def obtener_detalle_baches(db: Session, filtros: FiltrosAnalisis) -> list[FilaBache]:
+def obtener_detalle_baches(
+    db: Session, filtros: FiltrosAnalisis, *, limite: int = 500, desplazamiento: int = 0
+) -> list[FilaBache]:
     """
     Una fila por cada tanda de horno.
 
@@ -403,8 +405,9 @@ def obtener_detalle_baches(db: Session, filtros: FiltrosAnalisis) -> list[FilaBa
                 RegistroHorno.orden_id.in_(select(ordenes.c.id)),
                 RegistroHorno.eliminado == False,
             )
-            .order_by(RegistroHorno.hora_inicio.desc())
-            .limit(500)
+            .order_by(RegistroHorno.hora_inicio.desc(), RegistroHorno.id.desc())
+            .offset(desplazamiento)
+            .limit(limite)
         )
         .unique()
         .all()

@@ -113,3 +113,8 @@ class FilaBache(BaseModel):
     aceite_por_bulto: Decimal | None
     rendimiento_porcentaje: Decimal | None
     porcentaje_absorcion_aceite: Decimal | None
+
+
+class PaginaBaches(BaseModel):
+    items: list[FilaBache]
+    hay_siguiente: bool
