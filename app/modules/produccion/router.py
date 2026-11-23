@@ -27,6 +27,8 @@ from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.schemas import (
     FormulaGuardar,
+    FormulaNocheGuardar,
+    FormulaNocheSalida,
     FormulaPapaGuardar,
     FormulaPapaSalida,
     FormulaPapaSugerenciaSalida,
@@ -47,6 +49,7 @@ from app.modules.produccion.schemas import (
     RegistroHornoSalida,
 )
 from app.modules.produccion.servicios import formula as servicio_formula
+from app.modules.produccion.servicios import formula_noche as servicio_formula_noche
 from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
 from app.modules.produccion.servicios import horno as servicio_horno
 from app.modules.produccion.servicios import ordenes as servicio_ordenes
@@ -111,6 +114,7 @@ GestionaFormulasPapa = Annotated[
 router = APIRouter(prefix="/ordenes", tags=["Órdenes de producción"])
 router_bodega_ordenes = APIRouter(prefix="/bodega/ordenes", tags=["Bodega · Fórmula de producción"])
 router_bodega_formulas = APIRouter(prefix="/bodega/formulas-papa", tags=["Bodega · Fórmulas por producto"])
+router_bodega_noche = APIRouter(prefix="/bodega/formula-noche", tags=["Bodega · Fórmula de la noche"])
 
 
 @router_bodega_formulas.get("", response_model=list[FormulaPapaSalida])
@@ -206,6 +210,13 @@ def listar_ordenes_bodega(
         destino=destino,
         solo_sin_formula=solo_sin_formula,
     )
+
+
+@router_bodega_ordenes.post("/{orden_id}/confirmar-formula", response_model=OrdenSalida)
+def confirmar_formula_noche(orden_id: int, db: BD, usuario: BodegaFormula):
+    """Bodega da por buena la fórmula de la noche que puso la app (V20)."""
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_formula_noche.confirmar(db, orden, usuario)
 
 
 @router_bodega_ordenes.get("/{orden_id}", response_model=OrdenBodegaDetalle)
@@ -477,3 +488,18 @@ def eliminar_recepcion(orden_id: int, recepcion_id: int, db: BD, admin: SoloAdmi
     if recepcion.orden_id != orden_id:
         raise RecursoNoEncontrado("Esa recepción no pertenece a la orden indicada.")
     servicio_saborizado.eliminar_recepcion(db, recepcion, admin)
+
+
+# --- Formula de la noche por horno (V20) --------------------------------------
+
+
+@router_bodega_noche.get("", response_model=list[FormulaNocheSalida])
+def listar_formula_noche(db: BD, _: VeFormulasPapa):
+    """La mezcla que Bodega dejó para la noche en cada horno."""
+    return servicio_formula_noche.listar(db)
+
+
+@router_bodega_noche.put("/{horno_id}", response_model=FormulaNocheSalida)
+def guardar_formula_noche(horno_id: int, datos: FormulaNocheGuardar, db: BD, usuario: GestionaFormulasPapa):
+    """Reemplaza la fórmula de la noche del horno; lista vacía la borra."""
+    return servicio_formula_noche.guardar(db, horno_id, datos, usuario)

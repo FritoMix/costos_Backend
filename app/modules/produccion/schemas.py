@@ -65,6 +65,8 @@ class OrdenSalida(BaseModel):
     cerrada_automaticamente: bool = False
     formula_estado: str
     formula_obligatoria: bool
+    # La puso la app con la formula de la noche; Bodega debe confirmarla (V20).
+    formula_automatica: bool = False
     supervisor: UsuarioRef
     turno: Referencia
     horno: Referencia
@@ -466,3 +468,26 @@ class OrdenDetalle(BaseModel):
     formula: FormulaSalida | None
     registros_horno: list[RegistroHornoSalida]
     recepciones: list[RecepcionSalida]
+
+
+# --- Formula de la noche por horno (V20) --------------------------------------
+
+
+class FormulaNocheFilaSalida(BaseModel):
+    referencia_papa_id: int
+    nombre: str
+    bultos_por_tanda: int
+
+
+class FormulaNocheSalida(BaseModel):
+    horno_id: int
+    horno: str
+    filas: list[FormulaNocheFilaSalida]
+    total_bultos_por_tanda: int
+    actualizado_por: str | None = None
+    fecha_actualizacion: datetime | None = None
+
+
+class FormulaNocheGuardar(BaseModel):
+    # Lista vacia: el horno queda sin formula de la noche.
+    referencias: list[FormulaReferenciaGuardar] = Field(default_factory=list)

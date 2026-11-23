@@ -372,6 +372,8 @@ def guardar(
     orden.referencias.extend(filas_de_mezcla(orden, mezcla, usuario.id))
 
     orden.formula_notas = (datos.notas or "").strip() or None
+    # Si la habia puesto la app con la formula de la noche, ya la reviso Bodega.
+    orden.formula_automatica = False
     orden.formula_actualizada_por_id = usuario.id
     orden.formula_fecha_actualizacion = datetime.now(UTC)
     db.flush()

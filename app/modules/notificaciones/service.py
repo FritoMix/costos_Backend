@@ -178,15 +178,22 @@ def avisar_orden_para_bodega(db: Session, orden) -> None:
     horas = orden.horas_produccion
     duracion = f" · {horas} {'hora' if horas == 1 else 'horas'}" if horas else ""
 
+    if getattr(orden, "formula_automatica", False):
+        # La app le puso la formula de la noche: Bodega la confirma al llegar.
+        titulo = f"Confirma la fórmula de la noche · {orden.numero_orden}"
+        estado = "Tomó la fórmula de la noche del horno. Confírmala o corrígela."
+    else:
+        titulo = f"Orden pendiente de fórmula · {orden.numero_orden}"
+        estado = "Pendiente de fórmula."
     _crear_para(
         db,
         usuarios=bodegueros,
         tipo=TipoNotificacion.ORDEN_PARA_BODEGA,
-        titulo=f"Orden pendiente de fórmula · {orden.numero_orden}",
+        titulo=titulo,
         mensaje=(
             f"Nueva orden {orden.numero_orden} de {orden.producto.nombre_comercial} "
             f"({destino}) · {orden.cantidad_programada} kg{duracion} · "
-            f"{orden.horno.nombre}. Pendiente de fórmula."
+            f"{orden.horno.nombre}. {estado}"
         ),
         orden_id=orden.id,
     )
@@ -223,7 +230,9 @@ def avisar_formula_lista(db: Session, orden) -> None:
 
 
 @atomica
-def avisar_orden_creada(db: Session, orden, *, formula_lista: bool) -> int:
+def avisar_orden_creada(
+    db: Session, orden, *, formula_lista: bool, bodega_avisada: bool | None = None
+) -> int:
     """
     "Nueva orden" para todo el personal activo, cada rol con lo que le toca.
 
@@ -233,10 +242,12 @@ def avisar_orden_creada(db: Session, orden, *, formula_lista: bool) -> int:
     formula; Horno y el supervisor de la orden cuando ya quedo lista), ni a
     quien creo la orden. Devuelve cuantos avisos se crearon.
     """
+    if bodega_avisada is None:
+        bodega_avisada = not formula_lista
     ya_avisados: set[int] = {orden.supervisor_id}
     if formula_lista:
         ya_avisados |= {u.id for u in _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO])}
-    else:
+    if bodega_avisada:
         ya_avisados |= {u.id for u in _destinatarios_bodega(db)}
 
     horas = orden.horas_produccion
@@ -356,6 +367,12 @@ def revisar_ordenes_vencidas(db: Session) -> int:
         return 0
     _ultima_revision = ahora
 
+    try:
+        recordar_formula_noche(db)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("No se pudo crear el recordatorio de la fórmula de la noche")
+
     from app.modules.produccion.models import EstadoOrden, OrdenProduccion
     from app.modules.produccion.servicios import ordenes as servicio_ordenes
 
@@ -393,6 +410,48 @@ def revisar_ordenes_vencidas(db: Session) -> int:
             db.rollback()
             logger.exception("No se pudo cerrar sola la orden %s", orden.numero_orden)
     return cerradas
+
+
+# --- Recordatorio a Bodega (V20) ---------------------------------------------
+
+# Bodega sale a las 5 pm: a las 4:45 se le recuerda dejar la formula de la noche.
+HORA_RECORDATORIO_BODEGA = (16, 45)
+
+
+def recordar_formula_noche(db: Session, ahora_local: datetime | None = None) -> int:
+    """
+    Una vez al dia, desde las 4:45 pm, le recuerda a cada bodeguero activo
+    dejar la formula de la noche de cada horno. Devuelve cuantos creo.
+    """
+    ahora_local = ahora_local or datetime.now(ZONA_HORARIA_LOCAL)
+    if (ahora_local.hour, ahora_local.minute) < HORA_RECORDATORIO_BODEGA:
+        return 0
+    inicio_dia = ahora_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    ya_recordados = set(
+        db.scalars(
+            select(Notificacion.usuario_id).where(
+                Notificacion.tipo == TipoNotificacion.RECORDAR_FORMULA_NOCHE,
+                Notificacion.fecha_programada >= inicio_dia,
+            )
+        ).all()
+    )
+    pendientes = [u for u in _destinatarios_bodega(db) if u.id not in ya_recordados]
+    if not pendientes:
+        return 0
+    creados = _crear_para(
+        db,
+        usuarios=pendientes,
+        tipo=TipoNotificacion.RECORDAR_FORMULA_NOCHE,
+        titulo="Deja la fórmula de la noche",
+        mensaje=(
+            "Antes de irte, deja en cada horno la papa que despachaste para la noche. "
+            "Las órdenes de la noche la toman solas y mañana las confirmas."
+        ),
+        orden_id=None,
+        fecha_programada=ahora_local.astimezone(UTC),
+    )
+    db.commit()
+    return creados
 
 
 # --- Consulta y lectura ----------------------------------------------------
