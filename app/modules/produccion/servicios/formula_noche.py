@@ -70,7 +70,15 @@ def _salida(horno: Horno, filas: list[FormulaNocheHorno]) -> FormulaNocheSalida:
 
 def listar(db: Session) -> list[FormulaNocheSalida]:
     """La formula de la noche de cada horno activo (vacia si no la han dejado)."""
-    hornos = db.scalars(select(Horno).where(Horno.activo == True).order_by(Horno.nombre)).all()  # noqa: E712
+    from app.modules.catalogos.models import Linea
+
+    # Solo los hornos de las lineas con Bodega (la papa) (V21).
+    hornos = db.scalars(
+        select(Horno)
+        .join(Linea, Horno.linea_id == Linea.id)
+        .where(Horno.activo == True, Linea.usa_bodega == True)  # noqa: E712
+        .order_by(Horno.nombre)
+    ).all()
     return [_salida(horno, _filas(db, horno.id)) for horno in hornos]
 
 
@@ -80,6 +88,10 @@ def guardar(db: Session, horno_id: int, datos: FormulaNocheGuardar, usuario: Usu
     horno = db.get(Horno, horno_id)
     if horno is None or not horno.activo:
         raise RecursoNoEncontrado("Ese horno no existe o está inactivo.")
+    if not horno.linea.usa_bodega:
+        raise ErrorDeValidacion(
+            f"El {horno.nombre} es de la línea {horno.linea.nombre}: no lleva fórmula de papa."
+        )
     mezcla = resolver_mezcla(db, datos.referencias) if datos.referencias else []
     if mezcla:
         if horno.capacidad_bultos_hora is None:

@@ -28,6 +28,7 @@ from app.modules.produccion.models import (
     RegistroSaborizado,
 )
 from app.modules.produccion.schemas import RecepcionGuardar
+from app.modules.produccion.servicios.consultas_ordenes import verificar_linea
 from app.modules.produccion.servicios.registros import bloquear_orden
 from app.modules.produccion.servicios.tandas import (
     elegir_numero_tanda,
@@ -109,6 +110,7 @@ def crear_recepcion(
     orden = bloquear_orden(db, orden.id)
     if orden.estado != EstadoOrden.EN_PRODUCCION:
         raise ErrorDeValidacion("Solo se pueden registrar recepciones para una orden que esté En producción.")
+    verificar_linea(usuario, orden)
 
     numero = elegir_numero_tanda(
         db, orden, datos.numero_tanda, RegistroSaborizado, "recepción", "recepciones"

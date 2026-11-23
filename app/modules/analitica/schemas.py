@@ -91,6 +91,9 @@ class FilaBache(BaseModel):
 
     registro_id: int
     numero_orden: str
+    # Linea de la orden y variedad de la materia prima (V21).
+    linea: str | None = None
+    variedad: str | None = None
     fecha: date
     hora_inicio: datetime
     hora_fin: datetime

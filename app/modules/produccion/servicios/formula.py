@@ -347,6 +347,8 @@ def guardar(
     from sqlalchemy import text
 
     db.execute(text("SELECT pg_advisory_xact_lock(741902632)"))
+    if not orden.linea.usa_bodega:
+        raise ErrorDeValidacion(f"La línea {orden.linea.nombre} no lleva fórmula de Bodega.")
     if not orden.formula_obligatoria:
         raise ErrorDeValidacion(
             "Esta orden es histórica y no admite fórmula: se produce con el registro anterior."
@@ -684,7 +686,15 @@ def listar_ordenes_bodega(
     destino: str | None = None,
     solo_sin_formula: bool = False,
 ) -> list[OrdenBodegaSalida]:
-    consulta = select(OrdenProduccion).where(OrdenProduccion.eliminado == False)
+    from app.modules.catalogos.models import Horno, Linea
+
+    # Bodega solo trabaja las lineas que la usan (la papa) (V21).
+    consulta = select(OrdenProduccion).where(
+        OrdenProduccion.eliminado == False,
+        OrdenProduccion.horno_id.in_(
+            select(Horno.id).join(Linea, Horno.linea_id == Linea.id).where(Linea.usa_bodega == True)  # noqa: E712
+        ),
+    )
     if fecha_desde is not None:
         consulta = consulta.where(OrdenProduccion.fecha >= fecha_desde)
     if fecha_hasta is not None:

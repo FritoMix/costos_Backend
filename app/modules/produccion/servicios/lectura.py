@@ -2,6 +2,7 @@
 
 from sqlalchemy.orm import joinedload, lazyload, selectinload
 
+from app.modules.catalogos.models import Horno
 from app.modules.produccion.models import OrdenProduccion, OrdenReferencia
 
 
@@ -11,7 +12,9 @@ def opciones_listado():
         lazyload("*"),
         joinedload(OrdenProduccion.supervisor),
         joinedload(OrdenProduccion.turno),
-        joinedload(OrdenProduccion.horno),
+        # La linea viaja con el horno (V21): misma consulta.
+        joinedload(OrdenProduccion.horno).joinedload(Horno.linea),
+        joinedload(OrdenProduccion.variedad),
         joinedload(OrdenProduccion.producto),
         joinedload(OrdenProduccion.categoria),
         selectinload(OrdenProduccion.referencias).load_only(

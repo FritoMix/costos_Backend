@@ -22,8 +22,15 @@ def calcular_cantidad_programada(
     pesa distinto; cabello de angel pesa mas), y si no tiene, el valor
     general de Catalogos > Configuracion.
 
-    Devuelve (cantidad_programada_kg, cantidad_canastillas_solicitadas).
+    Mojes, baches y bultos (V21): se guarda cuantos se pidieron y la meta en
+    kg queda en 0. La app captura lo real: no estima kg por unidad.
+
+    Devuelve (cantidad_programada_kg, cantidad_solicitada_en_su_unidad).
     """
+    if datos.unidad_solicitada in UnidadSolicitada.CONTEO:
+        if datos.cantidad_unidades is None or datos.cantidad_unidades <= 0:
+            raise ErrorDeValidacion(f"Indica cuántos {datos.unidad_solicitada} se pidieron.")
+        return Decimal("0"), Decimal(datos.cantidad_unidades)
     if datos.unidad_solicitada == UnidadSolicitada.CANASTILLAS:
         if datos.cantidad_canastillas is None or datos.cantidad_canastillas <= 0:
             raise ErrorDeValidacion("Debes indicar cuántas canastillas se solicitaron.")

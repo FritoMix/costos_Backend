@@ -22,6 +22,7 @@ from app.modules.catalogos.schemas import (
     HornoCapacidadGuardar,
     HornoGuardar,
     HornoSalida,
+    LineaSalida,
     MuestraDensidadCrear,
     MuestraDensidadSalida,
     ProductoGuardar,
@@ -30,8 +31,10 @@ from app.modules.catalogos.schemas import (
     TipoAceiteSalida,
     TurnoGuardar,
     TurnoSalida,
+    VariedadGuardar,
+    VariedadSalida,
 )
-from app.modules.identidad.dependencias import requiere_roles
+from app.modules.identidad.dependencias import UsuarioAutenticado, requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 
 BD = Annotated[Session, Depends(get_db)]
@@ -262,3 +265,33 @@ def actualizar_aceite(aceite_id: int, datos: TipoAceiteGuardar, db: BD, _: SoloA
 @router.delete("/aceites/{aceite_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_aceite(aceite_id: int, db: BD, _: SoloAdmin) -> None:
     service.eliminar_aceite(db, aceite_id)
+
+
+# --- Lineas de produccion y variedades (V21) --------------------------------
+
+
+@router.get("/lineas", response_model=list[LineaSalida])
+def listar_lineas(db: BD, _: UsuarioAutenticado, solo_activas: bool = False):
+    return service.listar_lineas(db, solo_activas)
+
+
+@router.get("/variedades", response_model=list[VariedadSalida])
+def listar_variedades(
+    db: BD, _: UsuarioAutenticado, linea_id: int | None = None, solo_activas: bool = False
+):
+    return service.listar_variedades(db, linea_id, solo_activas)
+
+
+@router.post("/variedades", response_model=VariedadSalida, status_code=status.HTTP_201_CREATED)
+def crear_variedad(datos: VariedadGuardar, db: BD, _: SoloAdmin):
+    return service.crear_variedad(db, datos)
+
+
+@router.put("/variedades/{variedad_id}", response_model=VariedadSalida)
+def actualizar_variedad(variedad_id: int, datos: VariedadGuardar, db: BD, _: SoloAdmin):
+    return service.actualizar_variedad(db, variedad_id, datos)
+
+
+@router.delete("/variedades/{variedad_id}", status_code=status.HTTP_204_NO_CONTENT)
+def eliminar_variedad(variedad_id: int, db: BD, _: SoloAdmin) -> None:
+    service.eliminar_variedad(db, variedad_id)

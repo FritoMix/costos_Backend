@@ -455,6 +455,8 @@ def obtener_detalle_baches(db: Session, filtros: FiltrosAnalisis) -> list[FilaBa
             FilaBache(
                 registro_id=registro.id,
                 numero_orden=orden.numero_orden,
+                linea=orden.linea.nombre,
+                variedad=orden.variedad.nombre if orden.variedad else None,
                 fecha=orden.fecha,
                 hora_inicio=registro.hora_inicio,
                 hora_fin=registro.hora_fin,

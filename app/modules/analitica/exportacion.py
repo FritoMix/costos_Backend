@@ -46,6 +46,10 @@ ENCABEZADOS = [
     "kg_sabor_usado",
     "kg_desperdicio",
     "kg_aceite_consumido",
+    # V21: al final, para no mover las columnas que ya existian.
+    "linea",
+    "variedad",
+    "cantidad_solicitada",
 ]
 
 
@@ -159,6 +163,9 @@ def _filas_por_orden(db: Session, ids_ordenes, *, ventana_horno=(), ventana_sabo
                 float(kg_sabor),
                 float(kg_desperdicio),
                 float(kg_aceite),
+                orden.linea.nombre,
+                orden.variedad.nombre if orden.variedad else "",
+                orden.meta_texto,
             ]
         )
     return filas
@@ -199,7 +206,10 @@ def generar_excel(filas: list[list]) -> Generator[bytes, None, None]:
     # Ancho de columna aproximado al contenido, para que se lea sin ajustar.
     if filas:
         for indice, encabezado in enumerate(filas[0], start=1):
-            largo = max((len(str(fila[indice - 1])) for fila in filas), default=len(encabezado))
+            largo = max(
+                (len(str(fila[indice - 1])) for fila in filas if len(fila) >= indice),
+                default=len(encabezado),
+            )
             hoja.column_dimensions[hoja.cell(row=1, column=indice).column_letter].width = min(
                 max(12, largo + 2), 40
             )

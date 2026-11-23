@@ -59,8 +59,10 @@ def _guardar_cambio_de_horno(db: Session, orden: OrdenProduccion) -> None:
 
 @atomica
 def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenProduccion:
-    _horno, producto = validar_catalogos(db, datos)
+    horno, producto = validar_catalogos(db, datos)
     cantidad_kg, canastillas = calcular_cantidad_programada(db, datos, producto)
+    # Solo la papa lleva formula de Bodega (V21).
+    con_bodega = horno.linea.usa_bodega
 
     fecha = hoy_local()
     orden = OrdenProduccion(
@@ -71,30 +73,35 @@ def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenP
         horno_id=datos.horno_id,
         producto_id=datos.producto_id,
         categoria_id=datos.categoria_id,
+        variedad_id=datos.variedad_id,
         cantidad_programada=cantidad_kg,
         unidad_solicitada=datos.unidad_solicitada,
         cantidad_canastillas_solicitadas=canastillas,
         horas_produccion=datos.horas_produccion,
         destino=datos.destino,
         estado=EstadoOrden.PENDIENTE,
-        # Las ordenes nuevas exigen que Bodega defina la mezcla antes de
-        # producir. Las historicas conservan formula_obligatoria = FALSE.
-        formula_obligatoria=True,
+        # Las ordenes nuevas de papa exigen que Bodega defina la mezcla antes
+        # de producir. Las historicas y las de otras lineas no.
+        formula_obligatoria=con_bodega,
     )
     db.add(orden)
     db.flush()
-    aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
-    # Sin formula del producto: la que Bodega dejo para la noche en ese horno.
-    de_la_noche = not aplicada and servicio_formula_noche.aplicar_a_orden(db, orden)
-    if aplicada or de_la_noche:
-        notificaciones.avisar_formula_lista(db, orden)
-    if not aplicada:
-        # Bodega define la formula o, si la puso la app, la confirma.
-        notificaciones.avisar_orden_para_bodega(db, orden)
-    # Todo el personal se entera de la orden nueva (en la noche no hay Bodega).
-    notificaciones.avisar_orden_creada(
-        db, orden, formula_lista=bool(aplicada or de_la_noche), bodega_avisada=not aplicada
-    )
+    if con_bodega:
+        aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
+        # Sin formula del producto: la que Bodega dejo para la noche en ese horno.
+        de_la_noche = not aplicada and servicio_formula_noche.aplicar_a_orden(db, orden)
+        if aplicada or de_la_noche:
+            notificaciones.avisar_formula_lista(db, orden)
+        if not aplicada:
+            # Bodega define la formula o, si la puso la app, la confirma.
+            notificaciones.avisar_orden_para_bodega(db, orden)
+        # Todo el personal se entera de la orden nueva (en la noche no hay Bodega).
+        notificaciones.avisar_orden_creada(
+            db, orden, formula_lista=bool(aplicada or de_la_noche), bodega_avisada=not aplicada
+        )
+    else:
+        # Las demas lineas no esperan formula: ya se puede producir.
+        notificaciones.avisar_orden_creada(db, orden, formula_lista=True, bodega_avisada=True)
     db.flush()
     db.refresh(orden)
 
@@ -128,6 +135,11 @@ def editar_orden(
         orden.formula_fecha_actualizacion = None
         db.flush()
     horno, producto = validar_catalogos(db, datos, turno_actual_id=orden.turno_id)
+    if horno.linea_id != orden.horno.linea_id:
+        raise ErrorDeValidacion(
+            f"Esta orden es de la línea {orden.linea.nombre}: no se puede pasar a un horno de "
+            f"la línea {horno.linea.nombre}. Crea una orden nueva para esa línea."
+        )
 
     if datos.horas_produccion is not None:
         registros_horno = db.scalars(
@@ -178,6 +190,7 @@ def editar_orden(
     orden.horno_id = datos.horno_id
     orden.producto_id = datos.producto_id
     orden.categoria_id = datos.categoria_id
+    orden.variedad_id = datos.variedad_id
     orden.unidad_solicitada = datos.unidad_solicitada
     orden.cantidad_canastillas_solicitadas = canastillas
     orden.horas_produccion = datos.horas_produccion
@@ -192,7 +205,7 @@ def editar_orden(
         servicio_formula.recalcular_totales(db, orden)
         db.flush()
         db.refresh(orden)
-    if cambia_producto:
+    if cambia_producto and orden.linea.usa_bodega:
         aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
         if aplicada:
             notificaciones.avisar_formula_lista(db, orden)
