@@ -674,13 +674,23 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
     # Analitica: lectura, filtros, exportaciones y permisos.
     _json(cliente.get(f"{API}/analitica/indicadores"))
     _json(cliente.get(f"{API}/analitica/por-categoria"))
-    _json(cliente.get(f"{API}/analitica/baches"))
+    tandas = _json(cliente.get(f"{API}/analitica/baches"))
+    assert len(tandas) == 1
+    pagina_tandas = f"{API}/analitica/baches/pagina"
+    assert _json(cliente.get(pagina_tandas, params={"tamano": 1})) == {
+        "items": tandas, "hay_siguiente": False,
+    }
+    assert _json(cliente.get(pagina_tandas, params={"tamano": 1, "pagina": 2})) == {
+        "items": [], "hay_siguiente": False,
+    }
+    assert cliente.get(pagina_tandas, params={"tamano": 101}).status_code == 422
     assert cliente.get(f"{API}/analitica/exportar.csv").status_code == 200
     assert cliente.get(f"{API}/analitica/exportar.xlsx").status_code == 200
 
     operario = TestClient(app)
     _login(operario, "operario_horno_prueba")
     assert operario.get(f"{API}/analitica/indicadores").status_code == 403
+    assert operario.get(pagina_tandas).status_code == 403
     operario.close()
 
     assert cliente.delete(

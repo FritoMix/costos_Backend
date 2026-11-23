@@ -21,6 +21,7 @@ from app.modules.analitica.schemas import (
     FiltrosAnalisis,
     IndicadoresCategoriaSalida,
     IndicadoresSalida,
+    PaginaBaches,
 )
 from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
@@ -84,6 +85,22 @@ def por_categoria(request: Request, db: BD, _: SoloAdmin, filtros: Filtros):
 @limiter.limit("30/minute")
 def baches(request: Request, db: BD, _: SoloAdmin, filtros: Filtros):
     return service.obtener_detalle_baches(db, filtros)
+
+
+@router.get("/baches/pagina", response_model=PaginaBaches)
+@limiter.limit("30/minute")
+def baches_pagina(
+    request: Request,
+    db: BD,
+    _: SoloAdmin,
+    filtros: Filtros,
+    pagina: Annotated[int, Query(ge=1, le=1_000_000)] = 1,
+    tamano: Annotated[int, Query(ge=1, le=100)] = 50,
+):
+    filas = service.obtener_detalle_baches(
+        db, filtros, limite=tamano + 1, desplazamiento=(pagina - 1) * tamano
+    )
+    return PaginaBaches(items=filas[:tamano], hay_siguiente=len(filas) > tamano)
 
 
 @router.get("/exportar.csv")
