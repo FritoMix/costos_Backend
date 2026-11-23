@@ -27,6 +27,7 @@ from app.modules.analitica.schemas import (
     FiltrosAnalisis,
     IndicadoresCategoriaSalida,
     IndicadoresSalida,
+    TipoPapaTanda,
 )
 from app.modules.catalogos.models import (
     CategoriaProducto,
@@ -416,11 +417,13 @@ def obtener_detalle_baches(
         return []
 
     orden_ids = {r.orden_id for r in registros}
-    papa_frita_por_orden = dict(
-        db.execute(
+    saborizado_por_orden = {
+        orden_id: (kg_frita, kg_sabor)
+        for orden_id, kg_frita, kg_sabor in db.execute(
             select(
                 RegistroSaborizado.orden_id,
                 func.coalesce(func.sum(RegistroSaborizado.kg_recibidos), 0),
+                func.coalesce(func.sum(RegistroSaborizado.cantidad_sabor_kg), 0),
             )
             .where(
                 RegistroSaborizado.orden_id.in_(orden_ids),
@@ -428,12 +431,12 @@ def obtener_detalle_baches(
             )
             .group_by(RegistroSaborizado.orden_id)
         ).all()
-    )
+    }
 
     filas: list[FilaBache] = []
     for registro in registros:
         orden = registro.orden
-        kg_papa_frita = papa_frita_por_orden.get(registro.orden_id, CERO)
+        kg_papa_frita, kg_sabor = saborizado_por_orden.get(registro.orden_id, (CERO, CERO))
 
         aceite_por_bulto = rendimiento = absorcion = None
         if registro.kg_aceite_consumido is not None and registro.cantidad_bultos > 0:
@@ -448,6 +451,13 @@ def obtener_detalle_baches(
             absorcion = (registro.kg_aceite_consumido / kg_papa_frita * 100).quantize(
                 Decimal("0.01")
             )
+
+        kg_frito_por_bulto = porcentaje_sabor = None
+        if rendimiento is not None and registro.cantidad_bultos > 0:
+            peso_bulto = registro.kg_crudos_calculados / registro.cantidad_bultos
+            kg_frito_por_bulto = (peso_bulto * rendimiento / 100).quantize(Decimal("0.01"))
+        if kg_papa_frita > 0:
+            porcentaje_sabor = (kg_sabor / kg_papa_frita * 100).quantize(Decimal("0.01"))
 
         kg_desperdicio = sum((d.cantidad_kg for d in registro.desperdicios), CERO)
         horas = Decimal(
@@ -479,6 +489,24 @@ def obtener_detalle_baches(
                 aceite_por_bulto=aceite_por_bulto,
                 rendimiento_porcentaje=rendimiento,
                 porcentaje_absorcion_aceite=absorcion,
+                tipos_papa=tipos_papa_de(registro),
+                kg_frito_por_bulto=kg_frito_por_bulto,
+                kg_sabor_orden=kg_sabor,
+                porcentaje_sabor=porcentaje_sabor,
             )
         )
     return filas
+
+
+def nombre_tipo_papa(referencia) -> str:
+    """El tipo (A, B, C, D...) de la referencia; si no lo tiene, su nombre."""
+    return (referencia.tipo or referencia.nombre).strip()
+
+
+def tipos_papa_de(registro: RegistroHorno) -> list[TipoPapaTanda]:
+    """Bultos por tipo de papa de la formula de una tanda, en orden A, B, C..."""
+    bultos: dict[str, Decimal] = {}
+    for detalle in registro.referencias:
+        tipo = nombre_tipo_papa(detalle.referencia_papa)
+        bultos[tipo] = bultos.get(tipo, CERO) + detalle.cantidad_bultos
+    return [TipoPapaTanda(tipo=t, bultos=b) for t, b in sorted(bultos.items())]

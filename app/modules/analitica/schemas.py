@@ -86,6 +86,13 @@ class IndicadoresCategoriaSalida(BaseModel):
     sabores_usados: list[Desglose]
 
 
+class TipoPapaTanda(BaseModel):
+    """Bultos de un tipo de papa (A, B, C, D...) dentro de una tanda con formula."""
+
+    tipo: str
+    bultos: Decimal
+
+
 class FilaBache(BaseModel):
     """Una tanda de horno con sus indicadores, para la tabla de detalle."""
 
@@ -113,6 +120,14 @@ class FilaBache(BaseModel):
     aceite_por_bulto: Decimal | None
     rendimiento_porcentaje: Decimal | None
     porcentaje_absorcion_aceite: Decimal | None
+    # Tipos de papa de la formula, cada uno con sus bultos. Vacio si la tanda
+    # no uso formula (lineas sin Bodega o tandas viejas sin detalle).
+    tipos_papa: list[TipoPapaTanda] = []
+    # Rendimiento llevado a un bulto: kg crudos por bulto x rendimiento.
+    kg_frito_por_bulto: Decimal | None = None
+    # Sabor gastado en la orden y su porcentaje sobre los kg freidos.
+    kg_sabor_orden: Decimal = Decimal("0")
+    porcentaje_sabor: Decimal | None = None
 
 
 class PaginaBaches(BaseModel):

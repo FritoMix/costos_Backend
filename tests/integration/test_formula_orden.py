@@ -616,3 +616,65 @@ def test_bandeja_de_bodega_filtra_pendientes_sin_formula(
     assert detalle.orden.total_bultos_producidos == Decimal("0")
     assert detalle.orden.avance_bultos_porcentaje == Decimal("0.00")
     assert detalle.formula.total_bultos_por_tanda == 10
+
+
+def test_analisis_muestra_tipos_de_papa_kg_frito_por_bulto_y_sabor(
+    db, datos_base, orden_guardar
+):
+    """Cada tipo de papa de la fórmula con sus bultos, sin juntarlos en uno."""
+    from app.modules.analitica.exportacion import ENCABEZADOS, obtener_filas
+    from app.modules.analitica.schemas import FiltrosAnalisis
+    from app.modules.analitica.service import obtener_detalle_baches
+    from app.modules.produccion.schemas import RecepcionGuardar
+    from app.modules.produccion.servicios import saborizado as servicio_saborizado
+
+    segunda = _segunda_referencia(db, datos_base)
+    orden = servicio_ordenes.crear_orden(db, orden_guardar(), datos_base.supervisor)
+    servicio_formula.guardar(
+        db, orden, _formula((datos_base.referencia_papa, 30), (segunda, 20)), datos_base.bodeguero
+    )
+    servicio_ordenes.iniciar_orden(db, orden)
+    registro = servicio_horno.crear_registro(
+        db,
+        orden,
+        _tanda(
+            datos_base,
+            referencias=[
+                RegistroReferenciaGuardar(
+                    referencia_papa_id=datos_base.referencia_papa.id, cantidad_bultos=Decimal("30")
+                ),
+                RegistroReferenciaGuardar(referencia_papa_id=segunda.id, cantidad_bultos=Decimal("20")),
+            ],
+        ),
+        datos_base.operario_horno,
+    )
+    # 24 canastillas de 25 kg = 600 kg freídos; 12 kg de sabor = 2 %.
+    servicio_saborizado.crear_recepcion(
+        db,
+        orden,
+        RecepcionGuardar(
+            sabor_id=datos_base.sabor.id,
+            cantidad_sabor_kg=Decimal("12"),
+            pesos_canastillas=[Decimal("25")] * 24,
+        ),
+        datos_base.operario_saborizado,
+    )
+
+    fila = next(f for f in obtener_detalle_baches(db, FiltrosAnalisis()) if f.registro_id == registro.id)
+    assert [(t.tipo, t.bultos) for t in fila.tipos_papa] == [
+        ("Papa pareja", Decimal("30.00")),
+        ("Papa pastusa", Decimal("20.00")),
+    ]
+    # 600 / 2300 = 26,09 %; 2300 kg / 50 bultos = 46 kg por bulto → 12 kg fritos por bulto.
+    assert fila.rendimiento_porcentaje == Decimal("26.09")
+    assert fila.kg_frito_por_bulto == Decimal("12.00")
+    assert fila.kg_sabor_orden == Decimal("12.00")
+    assert fila.porcentaje_sabor == Decimal("2.00")
+
+    filas = obtener_filas(db, FiltrosAnalisis())
+    fila_exportada = next(f for f in filas[1:] if f[0] == orden.numero_orden)
+    exportada = dict(zip(ENCABEZADOS, fila_exportada, strict=True))
+    assert exportada["tipos_papa"] == "Papa pareja: 30 bultos; Papa pastusa: 20 bultos"
+    assert exportada["rendimiento_pct"] == 26.09
+    assert exportada["kg_frito_por_bulto"] == 12.0
+    assert exportada["porcentaje_sabor"] == 2.0

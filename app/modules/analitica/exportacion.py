@@ -14,6 +14,7 @@ import csv
 import io
 from collections.abc import Generator
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 
 from openpyxl import Workbook
 from sqlalchemy import func, select, union
@@ -22,10 +23,12 @@ from sqlalchemy.orm import Session
 from app.core.tiempo import ZONA_HORARIA_LOCAL, ahora_local
 from app.modules.analitica.schemas import FiltrosAnalisis
 from app.modules.analitica.service import consulta_ordenes_filtradas
+from app.modules.bodega.models import ReferenciaPapa
 from app.modules.produccion.models import (
     Desperdicio,
     OrdenProduccion,
     RegistroHorno,
+    RegistroHornoReferencia,
     RegistroSaborizado,
 )
 
@@ -50,6 +53,12 @@ ENCABEZADOS = [
     "linea",
     "variedad",
     "cantidad_solicitada",
+    # Tipos de papa de la formula, rendimiento, kg fritos por bulto y % de
+    # sabor: al final, por la misma razon.
+    "tipos_papa",
+    "rendimiento_pct",
+    "kg_frito_por_bulto",
+    "porcentaje_sabor",
 ]
 
 
@@ -139,11 +148,37 @@ def _filas_por_orden(db: Session, ids_ordenes, *, ventana_horno=(), ventana_sabo
         ).all()
     }
 
+    bultos_por_tipo: dict[int, dict[str, Decimal]] = {}
+    for orden_id, tipo, nombre, bultos_tipo in db.execute(
+        select(
+            RegistroHorno.orden_id,
+            ReferenciaPapa.tipo,
+            ReferenciaPapa.nombre,
+            func.sum(RegistroHornoReferencia.cantidad_bultos),
+        )
+        .join(RegistroHorno, RegistroHornoReferencia.registro_horno_id == RegistroHorno.id)
+        .join(ReferenciaPapa, RegistroHornoReferencia.referencia_papa_id == ReferenciaPapa.id)
+        .where(RegistroHorno.orden_id.in_(orden_ids), RegistroHorno.eliminado == False, *ventana_horno)
+        .group_by(RegistroHorno.orden_id, ReferenciaPapa.tipo, ReferenciaPapa.nombre)
+    ).all():
+        clave = (tipo or nombre).strip()
+        tipos = bultos_por_tipo.setdefault(orden_id, {})
+        tipos[clave] = tipos.get(clave, Decimal(0)) + bultos_tipo
+
     filas: list[list] = [ENCABEZADOS]
     for orden in ordenes:
         kg_crudos, bultos, kg_aceite = horno_totales.get(orden.id, (0, 0, 0))
         kg_desperdicio = desperdicio_totales.get(orden.id, 0)
         kg_papa_frita, kg_sabor = saborizado_totales.get(orden.id, (0, 0))
+        rendimiento = kg_frito_bulto = porcentaje_sabor = None
+        if kg_crudos and kg_papa_frita:
+            rendimiento = round(float(kg_papa_frita) / float(kg_crudos) * 100, 2)
+        if kg_papa_frita and bultos:
+            kg_frito_bulto = round(float(kg_papa_frita) / float(bultos), 2)
+        if kg_papa_frita:
+            porcentaje_sabor = round(float(kg_sabor) / float(kg_papa_frita) * 100, 2)
+        tipos = bultos_por_tipo.get(orden.id, {})
+        texto_tipos = "; ".join(f"{t}: {float(b):g} bultos" for t, b in sorted(tipos.items()))
 
         filas.append(
             [
@@ -166,6 +201,10 @@ def _filas_por_orden(db: Session, ids_ordenes, *, ventana_horno=(), ventana_sabo
                 orden.linea.nombre,
                 orden.variedad.nombre if orden.variedad else "",
                 orden.meta_texto,
+                texto_tipos,
+                rendimiento,
+                kg_frito_bulto,
+                porcentaje_sabor,
             ]
         )
     return filas
