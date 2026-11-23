@@ -27,6 +27,8 @@ class TipoNotificacion:
     # V19: se acabo el tiempo de la orden y cierre automatico.
     PRODUCCION_TERMINADA = "produccion_terminada"
     ORDEN_CERRADA_SOLA = "orden_cerrada_sola"
+    # V20: recordatorio diario a Bodega para dejar la formula de la noche.
+    RECORDAR_FORMULA_NOCHE = "recordar_formula_noche"
 
     # Avisos de reloj: si la orden ya se cerro, se dan por vistos sin sonar.
     DEL_RELOJ = frozenset({PRODUCCION_POR_TERMINAR, PRODUCCION_TERMINADA})

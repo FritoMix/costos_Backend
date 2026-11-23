@@ -17,5 +17,6 @@
   "V9__parametros_productivos_papa_horno.sql": "6ec39d403730038408917cc77e9765170be87a1e31e7b3e5d52d085c30c8352a",
   "V17__tandas_por_hora_y_paradas.sql": "e749a3401976203d07489a38c9a48851321639453b2622670f6a4bc6d1dcf91e",
   "V18__aceite_agregado_y_tipos_de_aceite.sql": "c4d41965f20102d163abf7e0eaf23138e90cbb03d3855038545303414c6d6734",
-  "V19__destino_producto_y_cierre_automatico.sql": "ac315e40d3bd06bf07a1e63f1844317849c68126af285d88525b97fd250d0c07"
+  "V19__destino_producto_y_cierre_automatico.sql": "ac315e40d3bd06bf07a1e63f1844317849c68126af285d88525b97fd250d0c07",
+  "V20__formula_de_la_noche.sql": "c2de174906d45dcf446564266d0c9f57c49959361870d2563d562b9e143671dc"
 }

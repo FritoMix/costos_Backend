@@ -23,6 +23,7 @@ from app.modules.produccion.dominio.limites import validar_conteo_tandas, valida
 from app.modules.produccion.models import EstadoOrden, OrdenProduccion, RegistroHorno, RegistroSaborizado
 from app.modules.produccion.schemas import OrdenGuardar
 from app.modules.produccion.servicios import formula as servicio_formula
+from app.modules.produccion.servicios import formula_noche as servicio_formula_noche
 from app.modules.produccion.servicios import formulas_papa as servicio_formulas_papa
 from app.modules.produccion.servicios.cantidades_ordenes import calcular_cantidad_programada
 from app.modules.produccion.servicios.consultas_ordenes import (
@@ -83,12 +84,17 @@ def crear_orden(db: Session, datos: OrdenGuardar, supervisor: Usuario) -> OrdenP
     db.add(orden)
     db.flush()
     aplicada = servicio_formulas_papa.aplicar_a_orden(db, orden)
-    if aplicada:
+    # Sin formula del producto: la que Bodega dejo para la noche en ese horno.
+    de_la_noche = not aplicada and servicio_formula_noche.aplicar_a_orden(db, orden)
+    if aplicada or de_la_noche:
         notificaciones.avisar_formula_lista(db, orden)
-    else:
+    if not aplicada:
+        # Bodega define la formula o, si la puso la app, la confirma.
         notificaciones.avisar_orden_para_bodega(db, orden)
     # Todo el personal se entera de la orden nueva (en la noche no hay Bodega).
-    notificaciones.avisar_orden_creada(db, orden, formula_lista=bool(aplicada))
+    notificaciones.avisar_orden_creada(
+        db, orden, formula_lista=bool(aplicada or de_la_noche), bodega_avisada=not aplicada
+    )
     db.flush()
     db.refresh(orden)
 
@@ -222,9 +228,16 @@ def iniciar_orden(db: Session, orden: OrdenProduccion, usuario: Usuario | None =
     # Una plantilla puede activarse o corregirse despues de crear la orden.
     # Solo se recuperan pendientes sin copia; nunca se reemplaza una mezcla guardada.
     if orden.formula_obligatoria and not orden.referencias:
-        servicio_formulas_papa.aplicar_a_orden(db, orden, exigir_valida=True)
+        # Primero la formula del producto; si no hay, la de la noche del
+        # horno; si tampoco sirve, el motivo de la formula del producto.
+        accion = "aplicar_activa_al_iniciar"
+        if not servicio_formulas_papa.aplicar_a_orden(db, orden):
+            if servicio_formula_noche.aplicar_a_orden(db, orden):
+                accion = "aplicar_formula_noche_al_iniciar"
+            else:
+                servicio_formulas_papa.aplicar_a_orden(db, orden, exigir_valida=True)
         registrar(
-            db, "formula_orden", orden.id, "aplicar_activa_al_iniciar",
+            db, "formula_orden", orden.id, accion,
             usuario.id if usuario else None, None,
             servicio_formula.obtener(db, orden).model_dump(mode="json"),
         )

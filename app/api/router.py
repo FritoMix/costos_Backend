@@ -23,7 +23,7 @@ from app.modules.catalogos.router import router as router_catalogos
 from app.modules.identidad.router import router_auth, router_usuarios
 from app.modules.notificaciones.router import router as router_notificaciones
 from app.modules.produccion.router import router as router_produccion
-from app.modules.produccion.router import router_bodega_formulas, router_bodega_ordenes
+from app.modules.produccion.router import router_bodega_formulas, router_bodega_noche, router_bodega_ordenes
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -36,6 +36,7 @@ api_router.include_router(router_catalogos)
 # restringida de Bodega y /bodega/formulas-papa su catalogo de formulas.
 api_router.include_router(router_bodega_ordenes)
 api_router.include_router(router_bodega_formulas)
+api_router.include_router(router_bodega_noche)
 api_router.include_router(router_produccion)
 api_router.include_router(router_analitica)
 api_router.include_router(router_notificaciones)

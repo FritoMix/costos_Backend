@@ -180,6 +180,9 @@ class OrdenProduccion(Base):
     formula_papa_id: Mapped[int | None] = mapped_column(
         ForeignKey("formulas_papa.id", ondelete="SET NULL"), nullable=True
     )
+    # La formula la puso la app con la de la noche del horno (V20): Bodega
+    # la debe confirmar o corregir.
+    formula_automatica: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
 
     referencias: Mapped[list["OrdenReferencia"]] = relationship(
         back_populates="orden",
@@ -690,3 +693,23 @@ class Canastilla(Base):
 
     numero: Mapped[int] = mapped_column(SmallInteger)
     peso_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+
+
+class FormulaNocheHorno(Base):
+    """
+    Mezcla que Bodega deja por horno para la noche (V20): bultos por tanda de
+    cada referencia. Una orden sin formula del producto la toma sola.
+    """
+
+    __tablename__ = "formula_noche_horno"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    horno_id: Mapped[int] = mapped_column(ForeignKey("hornos.id"))
+    referencia_papa_id: Mapped[int] = mapped_column(ForeignKey("referencias_papa.id"))
+    referencia_papa: Mapped["ReferenciaPapa"] = relationship(lazy="selectin")
+    bultos_por_tanda: Mapped[int] = mapped_column(Integer)
+    actualizado_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    actualizado_por: Mapped["Usuario | None"] = relationship(lazy="selectin")
+    fecha_actualizacion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
