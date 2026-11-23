@@ -62,6 +62,7 @@ class OrdenSalida(BaseModel):
     horas_produccion: int | None
     hora_inicio: datetime | None
     hora_fin: datetime | None
+    cerrada_automaticamente: bool = False
     formula_estado: str
     formula_obligatoria: bool
     supervisor: UsuarioRef

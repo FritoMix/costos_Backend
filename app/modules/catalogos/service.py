@@ -379,6 +379,7 @@ def crear_producto(db: Session, datos: ProductoGuardar) -> Producto:
         categoria_id=datos.categoria_id,
         activo=datos.activo,
         peso_estandar_canastilla_kg=datos.peso_estandar_canastilla_kg,
+        destino=datos.destino,
     )
     db.add(producto)
     db.commit()
@@ -395,6 +396,8 @@ def actualizar_producto(db: Session, producto_id: int, datos: ProductoGuardar) -
     producto.categoria_id = datos.categoria_id
     producto.activo = datos.activo
     producto.peso_estandar_canastilla_kg = datos.peso_estandar_canastilla_kg
+    if "destino" in datos.model_fields_set:
+        producto.destino = datos.destino
     db.commit()
     db.refresh(producto)
     return producto

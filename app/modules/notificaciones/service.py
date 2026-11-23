@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errores import RecursoNoEncontrado
+from app.core.tiempo import ZONA_HORARIA_LOCAL
 from app.db.transacciones import atomica
 from app.modules.identidad.models import Rol, RolCodigo, Usuario
 from app.modules.notificaciones.models import Notificacion, TipoNotificacion
@@ -28,6 +29,8 @@ logger = logging.getLogger("datacontrol")
 
 # Cuanto antes del final se avisa que la produccion esta por terminar.
 MINUTOS_DE_AVISO_PREVIO = 15
+# Si nadie finaliza la orden, la app la cierra este tiempo despues del fin.
+MINUTOS_PARA_CIERRE_AUTOMATICO = 30
 
 
 def _destinatarios_por_rol(db: Session, codigos: list[str]) -> list[Usuario]:
@@ -50,6 +53,11 @@ def _destinatarios_operarios(db: Session) -> list[Usuario]:
     return _destinatarios_por_rol(
         db, [RolCodigo.OPERARIO_HORNO, RolCodigo.OPERARIO_SABORIZADO]
     )
+
+
+def _destinatarios_jefes(db: Session) -> list[Usuario]:
+    """Supervisores y administradores activos: quienes cierran las ordenes."""
+    return _destinatarios_por_rol(db, [RolCodigo.SUPERVISOR, RolCodigo.ADMIN])
 
 
 def _destinatarios_bodega(db: Session) -> list[Usuario]:
@@ -241,40 +249,121 @@ def avisar_orden_creada(db: Session, orden) -> None:
 @atomica
 def programar_aviso_fin_produccion(db: Session, orden) -> None:
     """
-    Deja programado el aviso de "faltan 15 minutos".
+    Deja programados, al entrar la orden en produccion:
+      * "faltan 15 minutos" para los operarios, y
+      * "se acabo el tiempo" para supervisores y administradores (V19),
+        que avisa ademas a que hora la cerrara la app si nadie lo hace.
 
-    Se llama cuando la orden entra en produccion, que es cuando de verdad
-    empieza a correr el reloj. Si la orden no tiene horas programadas (las
-    creadas antes de esa funcion), no hay nada que avisar.
+    Si la orden no tiene horas programadas (las creadas antes de esa
+    funcion), no hay nada que avisar.
     """
     if not orden.horas_produccion or orden.hora_inicio is None:
         return
 
+    ahora = datetime.now(UTC)
     fin = orden.hora_inicio + timedelta(hours=int(orden.horas_produccion))
-    momento_aviso = fin - timedelta(minutes=MINUTOS_DE_AVISO_PREVIO)
-
     # Si la produccion es tan corta que el aviso ya quedo en el pasado, se
     # entrega de inmediato en vez de perderse.
-    if momento_aviso < datetime.now(UTC):
-        momento_aviso = datetime.now(UTC)
+    momento_aviso = max(fin - timedelta(minutes=MINUTOS_DE_AVISO_PREVIO), ahora)
+    # Hora de la planta, no la del servidor (en Render el servidor esta en UTC).
+    hora_fin = fin.astimezone(ZONA_HORARIA_LOCAL).strftime("%H:%M")
+    hora_cierre = (
+        (fin + timedelta(minutes=MINUTOS_PARA_CIERRE_AUTOMATICO))
+        .astimezone(ZONA_HORARIA_LOCAL)
+        .strftime("%H:%M")
+    )
 
     operarios = _destinatarios_operarios(db)
-    if not operarios:
-        return
+    if operarios:
+        _crear_para(
+            db,
+            usuarios=operarios,
+            tipo=TipoNotificacion.PRODUCCION_POR_TERMINAR,
+            titulo=f"Faltan {MINUTOS_DE_AVISO_PREVIO} minutos · {orden.numero_orden}",
+            mensaje=(
+                f"La producción de {orden.producto.nombre_comercial} en {orden.horno.nombre} "
+                f"termina a las {hora_fin}. Prepara el cierre."
+            ),
+            orden_id=orden.id,
+            fecha_programada=momento_aviso,
+        )
 
-    _crear_para(
-        db,
-        usuarios=operarios,
-        tipo=TipoNotificacion.PRODUCCION_POR_TERMINAR,
-        titulo=f"Faltan {MINUTOS_DE_AVISO_PREVIO} minutos · {orden.numero_orden}",
-        mensaje=(
-            f"La producción de {orden.producto.nombre_comercial} en {orden.horno.nombre} "
-            f"termina a las {fin.astimezone().strftime('%H:%M')}. Prepara el cierre."
-        ),
-        orden_id=orden.id,
-        fecha_programada=momento_aviso,
-    )
+    jefes = _destinatarios_jefes(db)
+    if jefes:
+        _crear_para(
+            db,
+            usuarios=jefes,
+            tipo=TipoNotificacion.PRODUCCION_TERMINADA,
+            titulo=f"Se acabó el tiempo · cierra la orden {orden.numero_orden}",
+            mensaje=(
+                f"{orden.producto.nombre_comercial} en {orden.horno.nombre} terminó a las "
+                f"{hora_fin}. Ábrela y finalízala. Si nadie la cierra, la app la cerrará "
+                f"sola a las {hora_cierre}."
+            ),
+            orden_id=orden.id,
+            fecha_programada=max(fin, ahora),
+        )
     db.flush()
+
+
+# --- Cierre automatico (V19) -------------------------------------------------
+
+_ultima_revision: datetime | None = None
+
+
+def revisar_ordenes_vencidas(db: Session) -> int:
+    """
+    Finaliza las ordenes que siguen En produccion 30 minutos despues de su
+    hora de fin y avisa a supervisores y administradores.
+
+    No hay procesos en segundo plano: se llama cuando alguien consulta sus
+    avisos (la app lo hace cada pocos segundos) y corre como maximo una vez
+    por minuto. Un error con una orden no afecta los avisos de nadie.
+    Devuelve cuantas ordenes cerro.
+    """
+    global _ultima_revision
+    ahora = datetime.now(UTC)
+    if _ultima_revision is not None and ahora - _ultima_revision < timedelta(minutes=1):
+        return 0
+    _ultima_revision = ahora
+
+    from app.modules.produccion.models import EstadoOrden, OrdenProduccion
+    from app.modules.produccion.servicios import ordenes as servicio_ordenes
+
+    candidatas = db.scalars(
+        select(OrdenProduccion).where(
+            OrdenProduccion.estado == EstadoOrden.EN_PRODUCCION,
+            OrdenProduccion.eliminado == False,  # noqa: E712
+            OrdenProduccion.hora_inicio.is_not(None),
+            OrdenProduccion.horas_produccion.is_not(None),
+        )
+    ).all()
+    cerradas = 0
+    for orden in candidatas:
+        fin = orden.hora_inicio + timedelta(hours=int(orden.horas_produccion))
+        if ahora < fin + timedelta(minutes=MINUTOS_PARA_CIERRE_AUTOMATICO):
+            continue
+        try:
+            orden = servicio_ordenes.finalizar_orden(db, orden)
+            orden.cerrada_automaticamente = True
+            _crear_para(
+                db,
+                usuarios=_destinatarios_jefes(db),
+                tipo=TipoNotificacion.ORDEN_CERRADA_SOLA,
+                titulo=f"La app cerró la orden {orden.numero_orden}",
+                mensaje=(
+                    f"Nadie la cerró {MINUTOS_PARA_CIERRE_AUTOMATICO} minutos después de su hora "
+                    "de fin, así que quedó Finalizada. Revisa que las tandas y recepciones estén "
+                    "completas."
+                ),
+                orden_id=orden.id,
+            )
+            db.commit()
+            cerradas += 1
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.exception("No se pudo cerrar sola la orden %s", orden.numero_orden)
+    return cerradas
 
 
 # --- Consulta y lectura ----------------------------------------------------
@@ -284,7 +373,37 @@ def pendientes(db: Session, usuario: Usuario) -> list[Notificacion]:
     """
     Avisos que ya cumplieron su hora y que esta persona no ha visto. Son los
     que el frontend muestra y con los que suena la alarma.
+
+    Los avisos de reloj ("faltan 15 minutos", "se acabo el tiempo") de una
+    orden que ya no esta en produccion se dan por vistos sin sonar.
     """
+    lista = _pendientes(db, usuario)
+    ids = {n.orden_id for n in lista if n.tipo in TipoNotificacion.DEL_RELOJ and n.orden_id}
+    if not ids:
+        return lista
+
+    from app.modules.produccion.models import EstadoOrden, OrdenProduccion
+
+    cerradas = set(
+        db.scalars(
+            select(OrdenProduccion.id).where(
+                OrdenProduccion.id.in_(ids), OrdenProduccion.estado != EstadoOrden.EN_PRODUCCION
+            )
+        ).all()
+    )
+    if not cerradas:
+        return lista
+    vigentes = []
+    for n in lista:
+        if n.tipo in TipoNotificacion.DEL_RELOJ and n.orden_id in cerradas:
+            n.leida = True
+        else:
+            vigentes.append(n)
+    db.commit()
+    return vigentes
+
+
+def _pendientes(db: Session, usuario: Usuario) -> list[Notificacion]:
     return list(
         db.scalars(
             select(Notificacion)

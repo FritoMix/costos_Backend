@@ -23,6 +23,12 @@ class TipoNotificacion:
     # Flujo nuevo: la orden nace pendiente de formula y Bodega la define.
     ORDEN_PARA_BODEGA = "orden_para_bodega"
     FORMULA_LISTA = "formula_lista"
+    # V19: se acabo el tiempo de la orden y cierre automatico.
+    PRODUCCION_TERMINADA = "produccion_terminada"
+    ORDEN_CERRADA_SOLA = "orden_cerrada_sola"
+
+    # Avisos de reloj: si la orden ya se cerro, se dan por vistos sin sonar.
+    DEL_RELOJ = frozenset({PRODUCCION_POR_TERMINAR, PRODUCCION_TERMINADA})
 
 
 class Notificacion(Base):
