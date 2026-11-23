@@ -227,18 +227,18 @@ def test_rango_de_sabor_avisa_fuera_de_rango(db, datos_base):
     orden = servicio_ordenes.iniciar_orden(db, orden)
     orden.hora_inicio -= timedelta(hours=2)
     db.flush()
-    # 5 kg de sabor sobre 100 kg = 5 %: por encima del 2,5 %.
+    # 5 kg de sabor sobre 50 kg = 10 %: por encima del 2,5 %.
     recepcion = servicio_saborizado.crear_recepcion(
         db,
         orden,
         RecepcionGuardar(
             sabor_id=datos_base.sabor.id,
             cantidad_sabor_kg=Decimal("5"),
-            pesos_canastillas=[Decimal("50"), Decimal("50")],
+            pesos_canastillas=[Decimal("25"), Decimal("25")],
         ),
         op_sabor,
     )
-    assert recepcion.porcentaje_sabor == Decimal("5.00")
+    assert recepcion.porcentaje_sabor == Decimal("10.00")
     assert any("Sabor alto" in a for a in recepcion.alertas)
 
 
@@ -268,3 +268,13 @@ def test_horno_no_cambia_de_linea_con_orden_abierta(db, datos_base, orden_guarda
     nuevo = catalogos.crear_horno(db, HornoGuardar(nombre="Horno sin línea"))
     assert nuevo.linea.codigo == "papa"
     assert db.scalar(select(func.count()).select_from(Horno).where(Horno.linea_id.is_(None))) == 0
+
+
+@pytest.mark.parametrize("peso", ["0.2", "45", "600"])
+def test_canastilla_de_peso_imposible_se_rechaza(peso):
+    """A prueba de errores: una canastilla fuera de 0,5 a 30 kg no se acepta."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        RecepcionGuardar(sabor_id=1, cantidad_sabor_kg=Decimal("1"), pesos_canastillas=[Decimal(peso)])
+    assert RecepcionGuardar(sabor_id=1, cantidad_sabor_kg=Decimal("1"), pesos_canastillas=[Decimal("6.5")])

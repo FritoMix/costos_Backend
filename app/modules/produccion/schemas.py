@@ -464,9 +464,11 @@ class RecepcionGuardar(BaseModel):
     sabor_id: int
     cantidad_sabor_kg: Decimal = Field(gt=0, max_digits=8, decimal_places=2)
     # Peso REAL de cada canastilla, una por una. Nunca un valor asumido.
-    pesos_canastillas: list[Annotated[Decimal, Field(gt=0, max_digits=6, decimal_places=2)]] = Field(
-        min_length=1
-    )
+    # A prueba de errores: una canastilla pesa unos 6 kg; menos de 0,5 o mas
+    # de 30 kg no es posible (dedo de mas en la bascula o kg en vez de g).
+    pesos_canastillas: list[
+        Annotated[Decimal, Field(ge=Decimal("0.5"), le=30, max_digits=6, decimal_places=2)]
+    ] = Field(min_length=1)
 
 
 # --- Detalle completo de una orden ----------------------------------------
