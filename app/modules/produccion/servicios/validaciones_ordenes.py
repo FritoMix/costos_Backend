@@ -54,6 +54,12 @@ def validar_catalogos(
         raise ErrorDeValidacion("El producto seleccionado no es válido.")
     if producto.categoria_id != datos.categoria_id:
         raise ErrorDeValidacion(f'El producto "{producto.nombre_comercial}" no pertenece a esa categoría.')
+    if not producto.sirve_para(datos.destino):
+        destino = "exportación" if datos.destino == DestinoOrden.EXPORTACION else "nacional"
+        raise ErrorDeValidacion(
+            f'El producto "{producto.nombre_comercial}" no está marcado para {destino}. '
+            "Cámbialo en Catálogos > Productos si corresponde."
+        )
 
     turno = db.get(Turno, datos.turno_id)
     if turno is None:

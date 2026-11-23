@@ -190,6 +190,8 @@ class OrdenProduccion(Base):
 
     hora_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     hora_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # La finalizo la app porque nadie la cerro a tiempo (V19).
+    cerrada_automaticamente: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     fecha_creacion: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -176,6 +176,13 @@ class Producto(Base):
         Numeric(6, 2), nullable=True
     )
 
+    # Mercado del producto (V19): nacional, exportacion o ambos. Al crear la
+    # orden solo se ofrecen los del destino elegido (o los de "ambos").
+    destino: Mapped[str] = mapped_column(String(20), default="ambos", server_default="ambos")
+
+    def sirve_para(self, destino_orden: str) -> bool:
+        return self.destino in ("ambos", destino_orden)
+
     def __repr__(self) -> str:
         return f"<Producto {self.nombre_comercial}>"
 

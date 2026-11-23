@@ -26,6 +26,7 @@ def consultar_pendientes(db: BD, usuario: UsuarioAutenticado) -> ResumenNotifica
     Lo que la app consulta cada pocos segundos: avisos que ya toca mostrar y
     que la persona aun no ha visto. Con esto suena la alarma.
     """
+    service.revisar_ordenes_vencidas(db)
     lista = service.pendientes(db, usuario)
     return ResumenNotificaciones(
         sin_leer=len(lista),

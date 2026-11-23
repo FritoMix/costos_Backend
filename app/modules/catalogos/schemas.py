@@ -4,6 +4,7 @@ Contratos de entrada y salida del modulo Catalogos.
 
 from datetime import date, time
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -126,6 +127,7 @@ class ProductoSalida(BaseModel):
     nombre_comercial: str
     activo: bool
     peso_estandar_canastilla_kg: Decimal | None
+    destino: str = "ambos"
     categoria: CatalogoSalida
 
 
@@ -134,6 +136,8 @@ class ProductoGuardar(BaseModel):
     categoria_id: int
     activo: bool = True
     peso_estandar_canastilla_kg: Decimal | None = Field(default=None, gt=0)
+    # Un cliente viejo que no lo envia conserva el destino actual.
+    destino: Literal["nacional", "exportacion", "ambos"] = "ambos"
 
 
 # --- Configuracion de planta ----------------------------------------------
