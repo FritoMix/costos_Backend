@@ -1100,3 +1100,39 @@ def test_resumen_inicio_coincide_con_detalle_y_respeta_roles(
 
     _login(cliente, "bodeguero_prueba")
     assert cliente.get(ruta).status_code == 403
+
+
+def test_api_lineas_variedades_y_recuperar_password(cliente: TestClient, db: Session, datos_base):
+    """Rutas nuevas de V21 tal como las usa el frontend."""
+    # Olvidé mi contraseña: sin sesión, misma respuesta exista o no el usuario.
+    for nombre in ("no_existe", datos_base.operario_horno.nombre_usuario):
+        respuesta = cliente.post(f"{API}/auth/olvide-password", json={"nombre_usuario": nombre})
+        assert respuesta.status_code == 202
+        assert "contraseña temporal" in respuesta.json()["mensaje"]
+
+    _login(cliente, "supervisor_prueba")
+    lineas = _json(cliente.get(f"{API}/catalogos/lineas"))
+    assert [linea["codigo"] for linea in lineas][:2] == ["papa", "platano"]
+    platano = next(linea for linea in lineas if linea["codigo"] == "platano")
+    assert platano["unidades_orden"] == ["kg"] and platano["pide_variedad"] is True
+    variedades = _json(cliente.get(f"{API}/catalogos/variedades", params={"linea_id": platano["id"]}))
+    assert {v["nombre"] for v in variedades} == {"Hartón", "FHIA 21"}
+    # El supervisor no edita variedades, pero sí da la contraseña temporal.
+    assert cliente.put(
+        f"{API}/catalogos/variedades/{variedades[0]['id']}",
+        json={"linea_id": platano["id"], "nombre": "X"},
+    ).status_code == 403
+    temporal = _json(
+        cliente.post(f"{API}/usuarios/{datos_base.operario_horno.id}/password-temporal")
+    )["password_temporal"]
+    assert len(temporal) == 8
+
+    # La persona entra con la temporal y la app sabe que debe cambiarla.
+    cliente.post(f"{API}/auth/logout")
+    respuesta = cliente.post(
+        f"{API}/auth/login",
+        json={"nombre_usuario": datos_base.operario_horno.nombre_usuario, "password": temporal},
+    )
+    usuario = _json(respuesta)["usuario"]
+    assert usuario["debe_cambiar_password"] is True
+    assert usuario["linea"] is None or usuario["linea"]["codigo"] == "papa"

@@ -16,10 +16,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Numeric,
+    SmallInteger,
     String,
     Table,
     Time,
     func,
+    select,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,6 +70,59 @@ class Turno(Base):
         return f"<Turno {self.nombre}>"
 
 
+class Linea(Base):
+    """
+    Linea de produccion (V21): papa, platano, pellet, extruido, trocillo y
+    nachos. Cada horno pertenece a una; la linea de la orden es la de su
+    horno. Solo la papa usa Bodega.
+    """
+
+    __tablename__ = "lineas"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    codigo: Mapped[str] = mapped_column(String(20), unique=True)
+    nombre: Mapped[str] = mapped_column(String(60))
+    # Como entra la materia prima al horno: 'bultos' (papa) o 'kg'.
+    unidad_materia_prima: Mapped[str] = mapped_column(String(10), default="kg")
+    nombre_materia_prima: Mapped[str] = mapped_column(String(40))
+    usa_bodega: Mapped[bool] = mapped_column(Boolean, default=False)
+    pide_variedad: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Unidades en que el supervisor pide la orden, separadas por coma.
+    unidades_orden_texto: Mapped[str] = mapped_column("unidades_orden", String(80), default="kg")
+    orden: Mapped[int] = mapped_column(SmallInteger, default=0)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    @property
+    def unidades_orden(self) -> list[str]:
+        return [u.strip() for u in self.unidades_orden_texto.split(",") if u.strip()]
+
+    @property
+    def en_bultos(self) -> bool:
+        return self.unidad_materia_prima == "bultos"
+
+    @property
+    def permite_canastillas(self) -> bool:
+        return "canastillas" in self.unidades_orden
+
+    def __repr__(self) -> str:
+        return f"<Linea {self.codigo}>"
+
+
+class Variedad(Base):
+    """Variedad de la materia prima de una linea: Harton, FHIA 21 (V21)."""
+
+    __tablename__ = "variedades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    linea_id: Mapped[int] = mapped_column(ForeignKey("lineas.id"))
+    linea: Mapped["Linea"] = relationship(lazy="joined")
+    nombre: Mapped[str] = mapped_column(String(80))
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    def __repr__(self) -> str:
+        return f"<Variedad {self.nombre}>"
+
+
 class TipoAceite(Base):
     """Aceite de fritura con su densidad fija (kg/L) y su proveedor (V18)."""
 
@@ -96,6 +151,14 @@ class Horno(Base):
     # Aceite del catalogo (V18). Su densidad solo se usa si el horno no
     # tiene muestras de densidad.
     aceite_id: Mapped[int | None] = mapped_column(ForeignKey("tipos_aceite.id"), nullable=True)
+
+    # Linea del horno (V21). De aqui sale la linea de la orden.
+    # Sin linea explicita, el horno queda de papa (como todos los existentes).
+    linea_id: Mapped[int] = mapped_column(
+        ForeignKey("lineas.id"),
+        default=select(Linea.id).where(Linea.codigo == "papa").scalar_subquery(),
+    )
+    linea: Mapped["Linea"] = relationship(lazy="joined")
     aceite: Mapped["TipoAceite | None"] = relationship(lazy="selectin")
 
     # Cuantos bultos de papa cruda puede procesar en una hora. Se usa para
@@ -180,8 +243,28 @@ class Producto(Base):
     # orden solo se ofrecen los del destino elegido (o los de "ambos").
     destino: Mapped[str] = mapped_column(String(20), default="ambos", server_default="ambos")
 
+    # Rango de % de sabor esperado (V21). Es un control, no un calculo.
+    sabor_minimo_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    sabor_maximo_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+
     def sirve_para(self, destino_orden: str) -> bool:
         return self.destino in ("ambos", destino_orden)
+
+    def fuera_de_rango_sabor(self, porcentaje: Decimal | None) -> str | None:
+        """Texto del aviso si el % de sabor real queda fuera del rango."""
+        if porcentaje is None:
+            return None
+        if self.sabor_minimo_pct is not None and porcentaje < self.sabor_minimo_pct:
+            return (
+                f"Sabor bajo: {porcentaje.normalize():f} % y el mínimo de "
+                f"{self.nombre_comercial} es {self.sabor_minimo_pct.normalize():f} %"
+            )
+        if self.sabor_maximo_pct is not None and porcentaje > self.sabor_maximo_pct:
+            return (
+                f"Sabor alto: {porcentaje.normalize():f} % y el máximo de "
+                f"{self.nombre_comercial} es {self.sabor_maximo_pct.normalize():f} %"
+            )
+        return None
 
     def __repr__(self) -> str:
         return f"<Producto {self.nombre_comercial}>"

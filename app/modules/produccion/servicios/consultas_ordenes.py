@@ -39,6 +39,14 @@ def _consulta_ordenes(
     if estado is not None:
         consulta = consulta.where(OrdenProduccion.estado == estado)
 
+    # Cada operario (y Bodega) ve solo las ordenes de su linea (V21).
+    if usuario.linea_id is not None:
+        from app.modules.catalogos.models import Horno
+
+        consulta = consulta.where(
+            OrdenProduccion.horno_id.in_(select(Horno.id).where(Horno.linea_id == usuario.linea_id))
+        )
+
     if solo_propias is None:
         solo_propias = usuario.rol.codigo == RolCodigo.SUPERVISOR
     if solo_propias:
@@ -97,3 +105,12 @@ def contar_pendientes_sin_formula(db: Session, usuario: Usuario) -> int | None:
         ~OrdenProduccion.referencias.any(),
     )
     return db.scalar(select(func.count()).select_from(pendientes.order_by(None).subquery())) or 0
+
+
+def verificar_linea(usuario: Usuario, orden: OrdenProduccion) -> None:
+    """Un operario solo trabaja las ordenes de su linea (V21)."""
+    if usuario.linea_id is not None and orden.horno.linea_id != usuario.linea_id:
+        raise ErrorDeValidacion(
+            f"La orden {orden.numero_orden} es de la línea {orden.linea.nombre}; "
+            f"tú trabajas en la línea {usuario.linea.nombre}."
+        )

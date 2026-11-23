@@ -3,10 +3,11 @@
 Estas consultas y validaciones no escriben ni confirman transacciones.
 """
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errores import ErrorDeValidacion
-from app.modules.catalogos.models import Horno, Producto, Turno
+from app.modules.catalogos.models import CategoriaProducto, Horno, Linea, Producto, Turno, Variedad
 from app.modules.produccion.models import DestinoOrden, UnidadSolicitada
 from app.modules.produccion.schemas import OrdenGuardar
 
@@ -29,14 +30,25 @@ def validar_catalogos(
 ) -> tuple[Horno, Producto]:
     if datos.destino not in (DestinoOrden.NACIONAL, DestinoOrden.EXPORTACION):
         raise ErrorDeValidacion("El destino debe ser Nacional o Exportación.")
-    if datos.unidad_solicitada not in (UnidadSolicitada.KG, UnidadSolicitada.CANASTILLAS):
-        raise ErrorDeValidacion("La unidad solicitada debe ser Kg o Canastillas.")
+    if datos.unidad_solicitada not in UnidadSolicitada.TODAS:
+        raise ErrorDeValidacion("La unidad solicitada no es válida.")
 
     validar_horas(datos)
 
     horno = db.get(Horno, datos.horno_id)
     if horno is None or not horno.activo:
         raise ErrorDeValidacion("El horno seleccionado no es válido.")
+    linea = horno.linea
+
+    # Cada linea pide la orden en su unidad (V21). Sin linea: como papa.
+    unidades = (
+        linea.unidades_orden
+        if linea is not None
+        else [UnidadSolicitada.KG, UnidadSolicitada.CANASTILLAS]
+    )
+    if datos.unidad_solicitada not in unidades:
+        nombre = linea.nombre if linea is not None else "Papa"
+        raise ErrorDeValidacion(f"En la línea {nombre} la orden se pide en {' o '.join(unidades)}.")
 
     if datos.destino == DestinoOrden.EXPORTACION:
         # Toda orden de exportacion se trabaja en un horno habilitado para
@@ -45,6 +57,10 @@ def validar_catalogos(
             raise ErrorDeValidacion(
                 f'El horno "{horno.nombre}" no está habilitado para órdenes de exportación.'
             )
+        # Aun asi, la categoria tiene que ser de la linea del horno: un
+        # producto de platano no se frie en un horno de papa.
+        if linea is not None:
+            _validar_categoria_de_la_linea(db, horno, linea, datos.categoria_id)
     else:
         if datos.categoria_id not in {c.id for c in horno.categorias}:
             raise ErrorDeValidacion(f'El horno "{horno.nombre}" no puede producir esa categoría.')
@@ -61,6 +77,8 @@ def validar_catalogos(
             "Cámbialo en Catálogos > Productos si corresponde."
         )
 
+    _validar_variedad(db, datos, linea)
+
     turno = db.get(Turno, datos.turno_id)
     if turno is None:
         raise ErrorDeValidacion("El turno seleccionado no existe.")
@@ -70,3 +88,29 @@ def validar_catalogos(
     return horno, producto
 
 
+
+
+def _validar_categoria_de_la_linea(db: Session, horno: Horno, linea: Linea, categoria_id: int) -> None:
+    de_la_linea = db.scalar(
+        select(Horno.id)
+        .join(Horno.categorias)
+        .where(Horno.linea_id == linea.id, CategoriaProducto.id == categoria_id)
+        .limit(1)
+    )
+    if de_la_linea is None:
+        raise ErrorDeValidacion(
+            f'Esa categoría no es de la línea {linea.nombre} del horno "{horno.nombre}".'
+        )
+
+
+def _validar_variedad(db: Session, datos: OrdenGuardar, linea: Linea | None) -> None:
+    """En platano el supervisor dice que variedad se va a fritar (Harton, FHIA 21)."""
+    if linea is None or not linea.pide_variedad:
+        if datos.variedad_id is not None and linea is not None:
+            raise ErrorDeValidacion(f"La línea {linea.nombre} no lleva variedad en la orden.")
+        return
+    if datos.variedad_id is None:
+        raise ErrorDeValidacion(f"Escoge qué tipo de {linea.nombre_materia_prima} se va a fritar.")
+    variedad = db.get(Variedad, datos.variedad_id)
+    if variedad is None or variedad.linea_id != linea.id or not variedad.activo:
+        raise ErrorDeValidacion(f"Ese tipo de {linea.nombre_materia_prima} no es válido.")

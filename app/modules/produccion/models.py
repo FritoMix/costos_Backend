@@ -29,10 +29,12 @@ from app.modules.bodega.models import ReferenciaPapa  # noqa: F401  (relacion)
 from app.modules.catalogos.models import (  # noqa: F401  (necesarios para las relaciones)
     CategoriaProducto,
     Horno,
+    Linea,
     Producto,
     Sabor,
     TipoDesperdicio,
     Turno,
+    Variedad,
 )
 from app.modules.identidad.models import Usuario  # noqa: F401
 
@@ -79,6 +81,14 @@ DESTINO_ETIQUETAS = {
 class UnidadSolicitada:
     KG = "kg"
     CANASTILLAS = "canastillas"
+    # Lineas que piden en su propia unidad (V21): trocillo, extruido, pellet.
+    MOJES = "mojes"
+    BACHES = "baches"
+    BULTOS = "bultos"
+
+    CONTEO = (MOJES, BACHES, BULTOS)
+    TODAS = (KG, CANASTILLAS, MOJES, BACHES, BULTOS)
+    SINGULAR = {"mojes": "moje", "baches": "bache", "bultos": "bulto", "canastillas": "canastilla"}
 
 
 class SecuenciaOrden(Base):
@@ -102,7 +112,7 @@ class OrdenProduccion(Base):
         ),
         CheckConstraint("destino IN ('nacional', 'exportacion')", name="ck_orden_destino_valido"),
         CheckConstraint(
-            "unidad_solicitada IN ('kg', 'canastillas')",
+            "unidad_solicitada IN ('kg', 'canastillas', 'mojes', 'baches', 'bultos')",
             name="ck_orden_unidad_solicitada_valida",
         ),
         # Un mismo horno NUNCA puede tener dos ordenes en produccion a la
@@ -135,6 +145,26 @@ class OrdenProduccion(Base):
 
     categoria_id: Mapped[int] = mapped_column(ForeignKey("categorias_producto.id"))
     categoria: Mapped["CategoriaProducto"] = relationship(lazy="selectin")
+
+    # Variedad de la materia prima (V21): en platano, Harton o FHIA 21.
+    variedad_id: Mapped[int | None] = mapped_column(ForeignKey("variedades.id"), nullable=True)
+    variedad: Mapped["Variedad | None"] = relationship(lazy="selectin")
+
+    @property
+    def linea(self) -> "Linea":
+        """La linea de la orden es la de su horno."""
+        return self.horno.linea
+
+    @property
+    def meta_texto(self) -> str:
+        """La meta como la pidio el supervisor: "600 kg", "3 baches", "50 canastillas (300 kg)"."""
+        kg = f"{self.cantidad_programada.normalize():f} kg"
+        if self.unidad_solicitada == UnidadSolicitada.KG or not self.cantidad_canastillas_solicitadas:
+            return kg
+        n = self.cantidad_canastillas_solicitadas.normalize()
+        nombre = UnidadSolicitada.SINGULAR.get(self.unidad_solicitada, self.unidad_solicitada)
+        conteo = f"{n:f} {nombre if n == 1 else self.unidad_solicitada}"
+        return f"{conteo} ({kg})" if self.cantidad_programada > 0 else conteo
 
     # Siempre en kg: es lo que usa el resto del sistema. Si el pedido llego
     # en canastillas, aqui ya quedo convertido.
@@ -527,7 +557,12 @@ class RegistroHorno(Base):
         parada = texto_parada(self)
         if parada:
             avisos.append(parada)
-        elif self.cantidad_bultos is not None and self.cantidad_bultos < settings.bultos_minimos_tanda:
+        elif (
+            # Solo la papa va en bultos; las demas lineas registran kg (V21).
+            (self.orden is None or self.orden.linea.en_bultos)
+            and self.cantidad_bultos is not None
+            and self.cantidad_bultos < settings.bultos_minimos_tanda
+        ):
             avisos.append(f"Solo {self.cantidad_bultos.normalize():f} bultos en la hora y no se anotó parada")
         return avisos + alertas_de_hora(self)
 
@@ -670,8 +705,20 @@ class RegistroSaborizado(Base):
     )
 
     @property
+    def porcentaje_sabor(self) -> Decimal | None:
+        """Sabor usado sobre los kg fritos recibidos, en % (V21)."""
+        if not self.kg_recibidos or self.kg_recibidos <= 0 or self.cantidad_sabor_kg is None:
+            return None
+        return (self.cantidad_sabor_kg / self.kg_recibidos * 100).quantize(Decimal("0.01"))
+
+    @property
     def alertas(self) -> list[str]:
-        return alertas_de_hora(self)
+        avisos = []
+        producto = self.orden.producto if self.orden is not None else None
+        fuera = producto.fuera_de_rango_sabor(self.porcentaje_sabor) if producto is not None else None
+        if fuera:
+            avisos.append(fuera)
+        return avisos + alertas_de_hora(self)
 
     def __repr__(self) -> str:
         return f"<RegistroSaborizado {self.id} orden={self.orden_id}>"

@@ -51,6 +51,7 @@ from app.modules.produccion.models import (
     RegistroHornoReferencia,
 )
 from app.modules.produccion.schemas import RegistroHornoGuardar
+from app.modules.produccion.servicios.consultas_ordenes import verificar_linea
 from app.modules.produccion.servicios.registros import bloquear_orden
 from app.modules.produccion.servicios.tandas import (
     aplicar_parada,
@@ -266,16 +267,31 @@ def _aplicar_datos(
     datos: RegistroHornoGuardar,
     franja: tuple[datetime, datetime] | None = None,
 ) -> None:
-    mezcla = _mezcla_solicitada(datos)
-    total_bultos = sum((bultos for _, bultos in mezcla), Decimal("0"))
+    linea = orden.linea
+    if linea.en_bultos:
+        if datos.referencias is None and datos.referencia_papa_id is None:
+            raise ErrorDeValidacion("Indica la papa y cuántos bultos entraron en la tanda.")
+        mezcla = _mezcla_solicitada(datos)
+        total_bultos = sum((bultos for _, bultos in mezcla), Decimal("0"))
 
-    if orden.referencias:
-        filas = _filas_desde_formula(db, orden, registro, mezcla)
+        if orden.referencias:
+            filas = _filas_desde_formula(db, orden, registro, mezcla)
+        else:
+            if orden.formula_obligatoria:
+                raise ErrorDeValidacion("Bodega debe definir la fórmula antes de registrar tandas.")
+            filas = _filas_desde_catalogo(db, registro, mezcla)
+        _validar_capacidad_tanda(orden, total_bultos)
+        kg_crudos = sum((fila.kg_crudos_calculados for fila in filas), Decimal("0")).quantize(CENTAVOS)
     else:
-        if orden.formula_obligatoria:
-            raise ErrorDeValidacion("Bodega debe definir la fórmula antes de registrar tandas.")
-        filas = _filas_desde_catalogo(db, registro, mezcla)
-    _validar_capacidad_tanda(orden, total_bultos)
+        # Platano, pellet, extruido...: el operario anota los kg de materia
+        # prima que entraron; no hay bultos ni referencias de papa (V21).
+        if datos.kg_materia_prima is None:
+            raise ErrorDeValidacion(
+                f"Indica cuántos kilos de {linea.nombre_materia_prima} entraron en la hora."
+            )
+        filas = []
+        total_bultos = Decimal("0")
+        kg_crudos = datos.kg_materia_prima.quantize(CENTAVOS, rounding=ROUND_HALF_UP)
 
     _validar_niveles_aceite(
         datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm, datos.aceite_agregado_litros
@@ -315,10 +331,8 @@ def _aplicar_datos(
     registro.hora_inicio = inicio
     registro.hora_fin = fin
     registro.cantidad_bultos = total_bultos.quantize(CENTAVOS, rounding=ROUND_HALF_UP)
-    registro.kg_crudos_calculados = sum((fila.kg_crudos_calculados for fila in filas), Decimal("0")).quantize(
-        CENTAVOS
-    )
-    if all(fila.kg_fritos_estimados is not None for fila in filas):
+    registro.kg_crudos_calculados = kg_crudos
+    if filas and all(fila.kg_fritos_estimados is not None for fila in filas):
         registro.kg_fritos_estimados = sum(
             (fila.kg_fritos_estimados for fila in filas), Decimal("0")
         ).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
@@ -369,6 +383,7 @@ def crear_registro(
             "Solo se pueden registrar datos de horno para una orden que esté En producción."
         )
 
+    verificar_linea(usuario, orden)
     numero = elegir_numero_tanda(db, orden, datos.numero_tanda, RegistroHorno)
     franja = franja_de_tanda(orden, numero)
     exigir_hora_empezada(franja, "tanda", numero)

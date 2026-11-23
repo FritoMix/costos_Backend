@@ -66,6 +66,15 @@ class Usuario(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    # Linea del operario o de Bodega (V21). Admin y supervisor no tienen:
+    # ven todas las lineas.
+    linea_id: Mapped[int | None] = mapped_column(ForeignKey("lineas.id"), nullable=True)
+    linea: Mapped["Linea | None"] = relationship(lazy="joined")  # noqa: F821
+    # Entro con una contraseña temporal: debe crear la suya (V21).
+    debe_cambiar_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
     # Borrado suave: un usuario eliminado no aparece en listas ni puede
     # entrar, pero sus ordenes y registros historicos siguen firmados por
     # el, para no perder la trazabilidad.

@@ -19,8 +19,10 @@ from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.identidad.schemas import (
     CambiarPasswordPeticion,
     LoginPeticion,
+    PasswordTemporalSalida,
     RolSalida,
     SesionSalida,
+    SolicitudRecuperacion,
     UsuarioActualizar,
     UsuarioCrear,
     UsuarioSalida,
@@ -28,6 +30,7 @@ from app.modules.identidad.schemas import (
 
 BD = Annotated[Session, Depends(get_db)]
 SoloAdmin = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN))]
+AdminOSupervisor = Annotated[Usuario, Depends(requiere_roles(RolCodigo.ADMIN, RolCodigo.SUPERVISOR))]
 
 router_auth = APIRouter(prefix="/auth", tags=["Autenticación"])
 router_usuarios = APIRouter(prefix="/usuarios", tags=["Usuarios"])
@@ -88,6 +91,29 @@ def cambiar_password(
 
 
 # --- Usuarios (solo Administrador) ----------------------------------------
+
+
+@router_auth.post("/olvide-password", status_code=status.HTTP_202_ACCEPTED)
+def olvide_password(datos: SolicitudRecuperacion, db: BD) -> dict:
+    """Pide una contraseña nueva: avisa al administrador y a los supervisores (V21).
+    La respuesta es siempre la misma, exista o no el usuario."""
+    service.solicitar_recuperacion(db, datos.nombre_usuario)
+    return {
+        "mensaje": "Listo. Le avisamos al administrador y al supervisor: ellos te darán una "
+        "contraseña temporal."
+    }
+
+
+@router_usuarios.get("/para-recuperar", response_model=list[UsuarioSalida])
+def usuarios_para_recuperar(db: BD, _: AdminOSupervisor) -> list[Usuario]:
+    """Lista para que el supervisor busque a quien darle contraseña temporal."""
+    return service.listar_usuarios(db)
+
+
+@router_usuarios.post("/{usuario_id}/password-temporal", response_model=PasswordTemporalSalida)
+def password_temporal(usuario_id: int, db: BD, quien: AdminOSupervisor) -> PasswordTemporalSalida:
+    usuario = service.obtener_usuario(db, usuario_id)
+    return PasswordTemporalSalida(password_temporal=service.dar_password_temporal(db, usuario, quien))
 
 
 @router_usuarios.get("", response_model=list[UsuarioSalida])

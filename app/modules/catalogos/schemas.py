@@ -6,7 +6,7 @@ from datetime import date, time
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # --- Catalogos simples (solo nombre + activo) ------------------------------
 
@@ -67,6 +67,36 @@ class TipoAceiteGuardar(BaseModel):
     activo: bool = True
 
 
+class LineaSalida(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    codigo: str
+    nombre: str
+    unidad_materia_prima: str
+    nombre_materia_prima: str
+    usa_bodega: bool
+    pide_variedad: bool
+    permite_canastillas: bool
+    unidades_orden: list[str]
+    activo: bool
+
+
+class VariedadSalida(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    linea_id: int
+    nombre: str
+    activo: bool
+
+
+class VariedadGuardar(BaseModel):
+    linea_id: int
+    nombre: str = Field(min_length=1, max_length=80)
+    activo: bool = True
+
+
 class HornoSalida(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -82,6 +112,7 @@ class HornoSalida(BaseModel):
     litros_por_cm: Decimal | None
     capacidad_bultos_hora: Decimal | None
     categorias: list[CatalogoSalida]
+    linea: LineaSalida | None = None
 
 
 class HornoGuardar(BaseModel):
@@ -90,6 +121,8 @@ class HornoGuardar(BaseModel):
     tipo_aceite: str | None = Field(default=None, max_length=50)
     # Aceite del catalogo (V18). Un cliente viejo que no lo envia lo conserva.
     aceite_id: int | None = None
+    # Linea del horno (V21). Si no se envia, conserva la suya (o papa si es nuevo).
+    linea_id: int | None = None
     apto_exportacion: bool = False
     tanque_diametro_cm: Decimal | None = Field(default=None, ge=0)
     litros_por_cm_manual: Decimal | None = Field(default=None, ge=0)
@@ -128,6 +161,8 @@ class ProductoSalida(BaseModel):
     activo: bool
     peso_estandar_canastilla_kg: Decimal | None
     destino: str = "ambos"
+    sabor_minimo_pct: Decimal | None = None
+    sabor_maximo_pct: Decimal | None = None
     categoria: CatalogoSalida
 
 
@@ -138,6 +173,19 @@ class ProductoGuardar(BaseModel):
     peso_estandar_canastilla_kg: Decimal | None = Field(default=None, gt=0)
     # Un cliente viejo que no lo envia conserva el destino actual.
     destino: Literal["nacional", "exportacion", "ambos"] = "ambos"
+    # Rango de % de sabor esperado (V21). Vacio: sin control.
+    sabor_minimo_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    sabor_maximo_pct: Decimal | None = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def _rango_sabor(self) -> "ProductoGuardar":
+        if (
+            self.sabor_minimo_pct is not None
+            and self.sabor_maximo_pct is not None
+            and self.sabor_minimo_pct > self.sabor_maximo_pct
+        ):
+            raise ValueError("El % mínimo de sabor no puede ser mayor que el máximo.")
+        return self
 
 
 # --- Configuracion de planta ----------------------------------------------

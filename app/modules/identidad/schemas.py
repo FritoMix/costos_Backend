@@ -29,6 +29,14 @@ class RolSalida(BaseModel):
     nombre: str
 
 
+class LineaRef(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    codigo: str
+    nombre: str
+
+
 class UsuarioSalida(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,6 +46,10 @@ class UsuarioSalida(BaseModel):
     activo: bool
     fecha_creacion: datetime
     rol: RolSalida
+    # Linea del operario o de Bodega (V21). Admin y supervisor no tienen.
+    linea: LineaRef | None = None
+    # Entro con una contraseña temporal: debe crear la suya (V21).
+    debe_cambiar_password: bool = False
 
 
 class UsuarioCrear(BaseModel):
@@ -46,6 +58,8 @@ class UsuarioCrear(BaseModel):
     password: PasswordNueva
     rol_id: int
     activo: bool = True
+    # Operarios y Bodega: su linea. Si no se envia, queda en papa.
+    linea_id: int | None = None
 
 
 class UsuarioActualizar(BaseModel):
@@ -53,6 +67,8 @@ class UsuarioActualizar(BaseModel):
     nombre_usuario: str = Field(min_length=3, max_length=50)
     rol_id: int
     activo: bool = True
+    # Operarios y Bodega: su linea. Si no se envia, conserva la que tenia.
+    linea_id: int | None = None
     # Solo si el administrador quiere cambiarla; si viene vacia, se deja
     # la que ya tenia.
     password: PasswordNueva | None = None
@@ -78,3 +94,12 @@ class SesionSalida(BaseModel):
 class CambiarPasswordPeticion(BaseModel):
     password_actual: str = Field(min_length=1)
     password_nueva: PasswordNueva
+
+
+class SolicitudRecuperacion(BaseModel):
+    nombre_usuario: str = Field(min_length=1, max_length=50)
+
+
+class PasswordTemporalSalida(BaseModel):
+    # Se muestra una sola vez a quien la genero, para dictarsela a la persona.
+    password_temporal: str

@@ -10,7 +10,7 @@ desactivarlo: asi ningun dato historico queda huerfano.
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errores import ConflictoDeDatos, ErrorDeValidacion, RecursoNoEncontrado
@@ -18,12 +18,14 @@ from app.modules.catalogos.models import (
     CategoriaProducto,
     ConfiguracionPlanta,
     Horno,
+    Linea,
     MuestraDensidadAceite,
     Producto,
     Sabor,
     TipoAceite,
     TipoDesperdicio,
     Turno,
+    Variedad,
     horno_categoria,
 )
 from app.modules.catalogos.schemas import (
@@ -34,6 +36,7 @@ from app.modules.catalogos.schemas import (
     ProductoGuardar,
     TipoAceiteGuardar,
     TurnoGuardar,
+    VariedadGuardar,
 )
 
 # --- Utilidades comunes ----------------------------------------------------
@@ -302,6 +305,7 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
     # borra (solo Administracion puede hacerlo desde la API).
     if "capacidad_bultos_hora" in datos.model_fields_set:
         horno.capacidad_bultos_hora = datos.capacidad_bultos_hora
+    _aplicar_linea_horno(db, horno, datos.linea_id)
 
     categorias = []
     for categoria_id in datos.categoria_ids:
@@ -310,6 +314,36 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
             raise ErrorDeValidacion("Una de las categorías seleccionadas no existe.")
         categorias.append(categoria)
     horno.categorias = categorias
+
+
+def _aplicar_linea_horno(db: Session, horno: Horno, linea_id: int | None) -> None:
+    """
+    Linea del horno (V21). Sin linea_id: un horno nuevo queda de papa y uno
+    existente conserva la suya. No se cambia la linea con una orden abierta.
+    """
+    if linea_id is None:
+        if horno.linea_id is None:
+            horno.linea_id = linea_por_codigo(db, "papa").id
+        return
+    linea = _obtener(db, Linea, linea_id, "Esa línea")
+    if not linea.activo and linea.id != horno.linea_id:
+        raise ErrorDeValidacion(f'La línea "{linea.nombre}" está desactivada.')
+    if horno.id is not None and horno.linea_id != linea.id:
+        from app.modules.produccion.models import EstadoOrden, OrdenProduccion
+
+        abierta = _existe(
+            db,
+            select(OrdenProduccion.id).where(
+                OrdenProduccion.horno_id == horno.id,
+                OrdenProduccion.eliminado == False,  # noqa: E712
+                OrdenProduccion.estado.in_([EstadoOrden.PENDIENTE, EstadoOrden.EN_PRODUCCION]),
+            ),
+        )
+        if abierta:
+            raise ErrorDeValidacion(
+                f'"{horno.nombre}" tiene una orden abierta: ciérrala antes de cambiarle la línea.'
+            )
+    horno.linea_id = linea.id
 
 
 def crear_horno(db: Session, datos: HornoGuardar) -> Horno:
@@ -380,6 +414,8 @@ def crear_producto(db: Session, datos: ProductoGuardar) -> Producto:
         activo=datos.activo,
         peso_estandar_canastilla_kg=datos.peso_estandar_canastilla_kg,
         destino=datos.destino,
+        sabor_minimo_pct=datos.sabor_minimo_pct,
+        sabor_maximo_pct=datos.sabor_maximo_pct,
     )
     db.add(producto)
     db.commit()
@@ -398,6 +434,10 @@ def actualizar_producto(db: Session, producto_id: int, datos: ProductoGuardar) -
     producto.peso_estandar_canastilla_kg = datos.peso_estandar_canastilla_kg
     if "destino" in datos.model_fields_set:
         producto.destino = datos.destino
+    # Un cliente viejo que no los envia conserva el rango de sabor.
+    if "sabor_minimo_pct" in datos.model_fields_set or "sabor_maximo_pct" in datos.model_fields_set:
+        producto.sabor_minimo_pct = datos.sabor_minimo_pct
+        producto.sabor_maximo_pct = datos.sabor_maximo_pct
     db.commit()
     db.refresh(producto)
     return producto
@@ -594,3 +634,76 @@ def _aplicar_aceite(aceite: TipoAceite, datos: TipoAceiteGuardar) -> None:
     aceite.densidad_kg_por_litro = datos.densidad_kg_por_litro
     aceite.proveedor = (datos.proveedor or "").strip() or None
     aceite.activo = datos.activo
+
+
+# --- Lineas de produccion y variedades (V21) --------------------------------
+
+
+def listar_lineas(db: Session, solo_activas: bool = False) -> list[Linea]:
+    consulta = select(Linea).order_by(Linea.orden, Linea.nombre)
+    if solo_activas:
+        consulta = consulta.where(Linea.activo == True)  # noqa: E712
+    return list(db.scalars(consulta).all())
+
+
+def linea_por_codigo(db: Session, codigo: str) -> Linea:
+    linea = db.scalar(select(Linea).where(Linea.codigo == codigo))
+    if linea is None:
+        raise RecursoNoEncontrado("Esa línea no existe.")
+    return linea
+
+
+def listar_variedades(
+    db: Session, linea_id: int | None = None, solo_activas: bool = False
+) -> list[Variedad]:
+    consulta = select(Variedad).order_by(Variedad.nombre)
+    if linea_id is not None:
+        consulta = consulta.where(Variedad.linea_id == linea_id)
+    if solo_activas:
+        consulta = consulta.where(Variedad.activo == True)  # noqa: E712
+    return list(db.scalars(consulta).all())
+
+
+def _variedad_libre(db: Session, linea_id: int, nombre: str, variedad_id: int | None) -> None:
+    consulta = select(Variedad.id).where(
+        Variedad.linea_id == linea_id, func.lower(Variedad.nombre) == nombre.lower()
+    )
+    if variedad_id is not None:
+        consulta = consulta.where(Variedad.id != variedad_id)
+    if db.scalar(consulta) is not None:
+        raise ConflictoDeDatos(f'Ya existe la variedad "{nombre}" en esa línea.')
+
+
+def crear_variedad(db: Session, datos: VariedadGuardar) -> Variedad:
+    _obtener(db, Linea, datos.linea_id, "Esa línea")
+    nombre = datos.nombre.strip()
+    _variedad_libre(db, datos.linea_id, nombre, None)
+    variedad = Variedad(linea_id=datos.linea_id, nombre=nombre, activo=datos.activo)
+    db.add(variedad)
+    db.commit()
+    db.refresh(variedad)
+    return variedad
+
+
+def actualizar_variedad(db: Session, variedad_id: int, datos: VariedadGuardar) -> Variedad:
+    """Cambia el nombre (para corregir errores de escritura) o la desactiva."""
+    variedad = _obtener(db, Variedad, variedad_id, "Esa variedad")
+    nombre = datos.nombre.strip()
+    _variedad_libre(db, variedad.linea_id, nombre, variedad_id)
+    variedad.nombre = nombre
+    variedad.activo = datos.activo
+    db.commit()
+    db.refresh(variedad)
+    return variedad
+
+
+def eliminar_variedad(db: Session, variedad_id: int) -> None:
+    from app.modules.produccion.models import OrdenProduccion
+
+    variedad = _obtener(db, Variedad, variedad_id, "Esa variedad")
+    if _existe(db, select(OrdenProduccion.id).where(OrdenProduccion.variedad_id == variedad_id)):
+        raise ErrorDeValidacion(
+            f'No se puede eliminar "{variedad.nombre}": ya se usó en órdenes. Puedes desactivarla.'
+        )
+    db.delete(variedad)
+    db.commit()

@@ -29,6 +29,8 @@ class TipoNotificacion:
     ORDEN_CERRADA_SOLA = "orden_cerrada_sola"
     # V20: recordatorio diario a Bodega para dejar la formula de la noche.
     RECORDAR_FORMULA_NOCHE = "recordar_formula_noche"
+    # V21: alguien olvido su contraseña (sin orden).
+    RECUPERAR_PASSWORD = "recuperar_password"
 
     # Avisos de reloj: si la orden ya se cerro, se dan por vistos sin sonar.
     DEL_RELOJ = frozenset({PRODUCCION_POR_TERMINAR, PRODUCCION_TERMINADA})

@@ -23,6 +23,21 @@ class ProductoRef(BaseModel):
 
     id: int
     nombre_comercial: str
+    sabor_minimo_pct: Decimal | None = None
+    sabor_maximo_pct: Decimal | None = None
+
+
+class LineaOrden(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    codigo: str
+    nombre: str
+    unidad_materia_prima: str
+    nombre_materia_prima: str
+    usa_bodega: bool
+    pide_variedad: bool
+    unidades_orden: list[str]
 
 
 class ReferenciaPapaRef(BaseModel):
@@ -58,7 +73,11 @@ class OrdenSalida(BaseModel):
     destino_etiqueta: str
     cantidad_programada: Decimal
     unidad_solicitada: str
+    # Cuantas se pidieron en la unidad del supervisor (canastillas, mojes,
+    # baches o bultos). Vacio si se pidio en kg.
     cantidad_canastillas_solicitadas: Decimal | None
+    # La meta en palabras: "600 kg", "3 baches", "50 canastillas (300 kg)".
+    meta_texto: str = ""
     horas_produccion: int | None
     hora_inicio: datetime | None
     hora_fin: datetime | None
@@ -72,6 +91,9 @@ class OrdenSalida(BaseModel):
     horno: Referencia
     producto: ProductoRef
     categoria: Referencia
+    # Linea de la orden (la de su horno) y variedad de la materia prima (V21).
+    linea: LineaOrden | None = None
+    variedad: Referencia | None = None
 
 
 class OrdenesPagina(BaseModel):
@@ -96,6 +118,10 @@ class OrdenGuardar(BaseModel):
     # a proposito: en la planta no se programan medias horas, y el minimo es
     # una hora.
     horas_produccion: int | None = Field(default=None, ge=1)
+    # Mojes (trocillo), baches (extruido) o bultos crudos (pellet): enteros (V21).
+    cantidad_unidades: int | None = Field(default=None, ge=1, le=1000)
+    # Variedad de la materia prima, en las lineas que la piden (platano).
+    variedad_id: int | None = None
 
 
 # --- Formula de produccion por orden --------------------------------------
@@ -345,6 +371,8 @@ class RegistroHornoGuardar(BaseModel):
     # Compatibilidad: clientes viejos envían una sola referencia.
     referencia_papa_id: int | None = Field(default=None, gt=0)
     cantidad_bultos: Decimal | None = Field(default=None, gt=0, max_digits=6, decimal_places=2)
+    # Lineas que no son papa (V21): kilos de materia prima que entraron.
+    kg_materia_prima: Decimal | None = Field(default=None, gt=0, le=20000, max_digits=8, decimal_places=2)
     operarios_seleccion: int = Field(ge=0, le=999)
     operarios_horno: int = Field(ge=0, le=999)
     nivel_aceite_inicial_cm: Decimal = Field(ge=0, max_digits=6, decimal_places=2)
@@ -376,9 +404,15 @@ class RegistroHornoGuardar(BaseModel):
 
     @model_validator(mode="after")
     def _exigir_mezcla(self) -> "RegistroHornoGuardar":
-        """Una tanda necesita el formato nuevo o los dos campos heredados."""
+        """Una tanda necesita el formato nuevo, los dos campos heredados o,
+        en las lineas que no son papa, los kg de materia prima (V21)."""
+        if self.kg_materia_prima is not None and not self.referencias and self.referencia_papa_id is None:
+            return self
         if not self.referencias and (self.referencia_papa_id is None or self.cantidad_bultos is None):
-            raise ValueError("Debes indicar al menos una referencia para la tanda.")
+            raise ValueError(
+                "Debes indicar al menos una referencia para la tanda "
+                "(o, en las líneas que no son papa, los kilos de materia prima)."
+            )
         if self.referencias:
             ids = [fila.referencia_papa_id for fila in self.referencias]
             if len(ids) != len(set(ids)):
@@ -417,6 +451,8 @@ class RecepcionSalida(BaseModel):
     minutos_parada: int = 0
     causa_parada: str | None = None
     nota_parada: str | None = None
+    # Sabor usado sobre lo recibido, en % (V21).
+    porcentaje_sabor: Decimal | None = None
     alertas: list[str] = []
 
 

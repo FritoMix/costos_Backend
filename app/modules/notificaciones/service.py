@@ -15,7 +15,7 @@ mirando la pantalla:
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,25 +33,37 @@ MINUTOS_DE_AVISO_PREVIO = 15
 MINUTOS_PARA_CIERRE_AUTOMATICO = 30
 
 
-def _destinatarios_por_rol(db: Session, codigos: list[str]) -> list[Usuario]:
-    """Usuarios activos que tienen alguno de esos roles."""
-    return list(
-        db.scalars(
-            select(Usuario)
-            .join(Rol)
-            .where(
-                Usuario.eliminado == False,
-                Usuario.activo == True,
-                Rol.codigo.in_(codigos),
-            )
-        ).all()
+def _destinatarios_por_rol(
+    db: Session, codigos: list[str], linea_id: int | None = None
+) -> list[Usuario]:
+    """
+    Usuarios activos que tienen alguno de esos roles. Con linea_id, solo los
+    de esa linea o los que no tienen linea (supervisor y administrador): un
+    operario de platano no recibe avisos de las ordenes de papa (V21).
+    """
+    consulta = (
+        select(Usuario)
+        .join(Rol)
+        .where(
+            Usuario.eliminado == False,
+            Usuario.activo == True,
+            Rol.codigo.in_(codigos),
+        )
     )
+    if linea_id is not None:
+        consulta = consulta.where(or_(Usuario.linea_id.is_(None), Usuario.linea_id == linea_id))
+    return list(db.scalars(consulta).all())
 
 
-def _destinatarios_operarios(db: Session) -> list[Usuario]:
+def _linea_de(orden) -> int | None:
+    horno = getattr(orden, "horno", None)
+    return getattr(horno, "linea_id", None)
+
+
+def _destinatarios_operarios(db: Session, linea_id: int | None = None) -> list[Usuario]:
     """Operarios de horno y saborizado activos: son quienes trabajan la orden."""
     return _destinatarios_por_rol(
-        db, [RolCodigo.OPERARIO_HORNO, RolCodigo.OPERARIO_SABORIZADO]
+        db, [RolCodigo.OPERARIO_HORNO, RolCodigo.OPERARIO_SABORIZADO], linea_id
     )
 
 
@@ -192,7 +204,7 @@ def avisar_orden_para_bodega(db: Session, orden) -> None:
         titulo=titulo,
         mensaje=(
             f"Nueva orden {orden.numero_orden} de {orden.producto.nombre_comercial} "
-            f"({destino}) · {orden.cantidad_programada} kg{duracion} · "
+            f"({destino}) · {orden.meta_texto}{duracion} · "
             f"{orden.horno.nombre}. {estado}"
         ),
         orden_id=orden.id,
@@ -208,7 +220,7 @@ def avisar_formula_lista(db: Session, orden) -> None:
     No se reutiliza `_destinatarios_operarios` porque saborizado no trabaja
     la mezcla de papa: solo avisa a horno y al supervisor de la orden.
     """
-    destinatarios = _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO])
+    destinatarios = _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO], _linea_de(orden))
     supervisor = orden.supervisor
     if supervisor is not None and supervisor.eliminado is False and supervisor.activo:
         destinatarios.append(supervisor)
@@ -231,7 +243,12 @@ def avisar_formula_lista(db: Session, orden) -> None:
 
 @atomica
 def avisar_orden_creada(
-    db: Session, orden, *, formula_lista: bool, bodega_avisada: bool | None = None
+    db: Session,
+    orden,
+    *,
+    formula_lista: bool,
+    bodega_avisada: bool | None = None,
+    horno_avisado: bool | None = None,
 ) -> int:
     """
     "Nueva orden" para todo el personal activo, cada rol con lo que le toca.
@@ -242,21 +259,29 @@ def avisar_orden_creada(
     formula; Horno y el supervisor de la orden cuando ya quedo lista), ni a
     quien creo la orden. Devuelve cuantos avisos se crearon.
     """
+    linea_id = _linea_de(orden)
+    con_bodega = orden.linea.usa_bodega if getattr(orden, "horno", None) is not None else True
     if bodega_avisada is None:
         bodega_avisada = not formula_lista
+    if horno_avisado is None:
+        # Horno ya recibio "formula lista" solo en las lineas con Bodega.
+        horno_avisado = formula_lista and con_bodega
     ya_avisados: set[int] = {orden.supervisor_id}
-    if formula_lista:
-        ya_avisados |= {u.id for u in _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO])}
+    if horno_avisado:
+        ya_avisados |= {u.id for u in _destinatarios_por_rol(db, [RolCodigo.OPERARIO_HORNO], linea_id)}
     if bodega_avisada:
         ya_avisados |= {u.id for u in _destinatarios_bodega(db)}
 
     horas = orden.horas_produccion
     duracion = f" · {horas} {'hora' if horas == 1 else 'horas'}" if horas else ""
+    variedad = f" ({orden.variedad.nombre})" if getattr(orden, "variedad", None) else ""
     base = (
-        f"{orden.producto.nombre_comercial} en {orden.horno.nombre}{duracion}. "
-        f"Meta: {orden.cantidad_programada} kg."
+        f"{orden.producto.nombre_comercial}{variedad} en {orden.horno.nombre}{duracion}. "
+        f"Meta: {orden.meta_texto}."
     )
-    if formula_lista:
+    if not con_bodega:
+        estado = "Ya se puede producir."
+    elif formula_lista:
         estado = "La fórmula ya quedó lista: se puede producir."
     else:
         estado = "Pendiente de la fórmula de Bodega antes de producir."
@@ -270,7 +295,9 @@ def avisar_orden_creada(
     }
     creados = 0
     for rol, tarea in tareas.items():
-        usuarios = [u for u in _destinatarios_por_rol(db, [rol]) if u.id not in ya_avisados]
+        usuarios = [
+            u for u in _destinatarios_por_rol(db, [rol], linea_id) if u.id not in ya_avisados
+        ]
         if not usuarios:
             continue
         ya_avisados |= {u.id for u in usuarios}
@@ -313,7 +340,7 @@ def programar_aviso_fin_produccion(db: Session, orden) -> None:
         .strftime("%H:%M")
     )
 
-    operarios = _destinatarios_operarios(db)
+    operarios = _destinatarios_operarios(db, _linea_de(orden))
     if operarios:
         _crear_para(
             db,
