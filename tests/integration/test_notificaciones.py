@@ -28,10 +28,10 @@ def test_avisar_dos_veces_no_duplica_ni_pierde(
         db, orden_guardar(), datos_base.supervisor
     )
 
-    # La orden nueva avisa a Bodega, no a los operarios: todavía no se puede
-    # producir hasta que exista la fórmula.
+    # La orden nueva avisa a Bodega que falta la fórmula y "Nueva orden" al
+    # resto (horno, saborizado y admin; no a Bodega ni a quien la creó).
     assert _contar(db, orden.id, TipoNotificacion.ORDEN_PARA_BODEGA) == 1
-    assert _contar(db, orden.id, TipoNotificacion.ORDEN_CREADA) == 0
+    assert _contar(db, orden.id, TipoNotificacion.ORDEN_CREADA) == 3
 
     servicio_notificaciones.avisar_orden_para_bodega(db, orden)
 
