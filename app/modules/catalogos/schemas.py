@@ -49,6 +49,23 @@ class TurnoGuardar(BaseModel):
 # --- Hornos ----------------------------------------------------------------
 
 
+class TipoAceiteSalida(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nombre: str
+    densidad_kg_por_litro: Decimal
+    proveedor: str | None
+    activo: bool
+
+
+class TipoAceiteGuardar(BaseModel):
+    nombre: str = Field(min_length=1, max_length=100)
+    densidad_kg_por_litro: Decimal = Field(gt=Decimal("0.5"), lt=Decimal("1.2"))
+    proveedor: str | None = Field(default=None, max_length=150)
+    activo: bool = True
+
+
 class HornoSalida(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,6 +73,7 @@ class HornoSalida(BaseModel):
     nombre: str
     activo: bool
     tipo_aceite: str | None
+    aceite: TipoAceiteSalida | None = None
     apto_exportacion: bool
     tanque_diametro_cm: Decimal | None
     litros_por_cm_manual: Decimal | None
@@ -69,6 +87,8 @@ class HornoGuardar(BaseModel):
     nombre: str = Field(min_length=1, max_length=50)
     activo: bool = True
     tipo_aceite: str | None = Field(default=None, max_length=50)
+    # Aceite del catalogo (V18). Un cliente viejo que no lo envia lo conserva.
+    aceite_id: int | None = None
     apto_exportacion: bool = False
     tanque_diametro_cm: Decimal | None = Field(default=None, ge=0)
     litros_por_cm_manual: Decimal | None = Field(default=None, ge=0)
