@@ -278,3 +278,47 @@ def test_canastilla_de_peso_imposible_se_rechaza(peso):
     with pytest.raises(ValidationError):
         RecepcionGuardar(sabor_id=1, cantidad_sabor_kg=Decimal("1"), pesos_canastillas=[Decimal(peso)])
     assert RecepcionGuardar(sabor_id=1, cantidad_sabor_kg=Decimal("1"), pesos_canastillas=[Decimal("6.5")])
+
+
+def test_sabores_por_categoria(db, datos_base):
+    """Cada categoría ofrece solo sus sabores; sin asignar, acepta todos."""
+    from app.modules.catalogos.models import Sabor
+    from app.modules.catalogos.schemas import CategoriaGuardar
+
+    _, horno, categoria, producto, _, op_sabor = _montar_linea(db, datos_base, "pellet", "Horno P")
+    jamon = Sabor(nombre="Jamón de Prueba", activo=True)
+    db.add(jamon)
+    db.flush()
+
+    # Sin sabores asignados: la categoría acepta todos los activos.
+    assert datos_base.sabor in catalogos.listar_sabores(db, True, categoria.id)
+
+    catalogos.actualizar_categoria(
+        db, categoria.id, CategoriaGuardar(nombre=categoria.nombre, sabor_ids=[jamon.id])
+    )
+    assert catalogos.listar_sabores(db, True, categoria.id) == [jamon]
+    assert categoria.sabor_ids == [jamon.id]
+    # Un cliente viejo que no envía sabor_ids los conserva.
+    catalogos.actualizar_categoria(db, categoria.id, CategoriaGuardar(nombre=categoria.nombre))
+    assert categoria.sabor_ids == [jamon.id]
+
+    orden = servicio_ordenes.crear_orden(
+        db,
+        _orden(
+            datos_base, horno, categoria, producto,
+            unidad_solicitada=UnidadSolicitada.BULTOS, cantidad_kg=None, cantidad_unidades=10,
+        ),
+        datos_base.supervisor,
+    )
+    orden = servicio_ordenes.iniciar_orden(db, orden)
+    orden.hora_inicio -= timedelta(hours=2)
+    db.flush()
+    datos = dict(cantidad_sabor_kg=Decimal("1"), pesos_canastillas=[Decimal("6")])
+    with pytest.raises(ErrorDeValidacion, match="no es de la categoría"):
+        servicio_saborizado.crear_recepcion(
+            db, orden, RecepcionGuardar(sabor_id=datos_base.sabor.id, **datos), op_sabor
+        )
+    recepcion = servicio_saborizado.crear_recepcion(
+        db, orden, RecepcionGuardar(sabor_id=jamon.id, **datos), op_sabor
+    )
+    assert recepcion.sabor_id == jamon.id

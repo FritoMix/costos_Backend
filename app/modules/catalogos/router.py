@@ -16,6 +16,8 @@ from app.modules.catalogos import service
 from app.modules.catalogos.schemas import (
     CatalogoGuardar,
     CatalogoSalida,
+    CategoriaGuardar,
+    CategoriaSalida,
     ConfiguracionGuardar,
     ConfiguracionSalida,
     DensidadVigenteSalida,
@@ -63,18 +65,18 @@ router = APIRouter(prefix="/catalogos", tags=["Catálogos"])
 # --- Categorias ------------------------------------------------------------
 
 
-@router.get("/categorias", response_model=list[CatalogoSalida])
+@router.get("/categorias", response_model=list[CategoriaSalida])
 def listar_categorias(db: BD, _: VeCatalogos, solo_activas: bool = False):
     return service.listar_categorias(db, solo_activas)
 
 
-@router.post("/categorias", response_model=CatalogoSalida, status_code=status.HTTP_201_CREATED)
-def crear_categoria(datos: CatalogoGuardar, db: BD, _: SoloAdmin):
+@router.post("/categorias", response_model=CategoriaSalida, status_code=status.HTTP_201_CREATED)
+def crear_categoria(datos: CategoriaGuardar, db: BD, _: SoloAdmin):
     return service.crear_categoria(db, datos)
 
 
-@router.put("/categorias/{categoria_id}", response_model=CatalogoSalida)
-def actualizar_categoria(categoria_id: int, datos: CatalogoGuardar, db: BD, _: SoloAdmin):
+@router.put("/categorias/{categoria_id}", response_model=CategoriaSalida)
+def actualizar_categoria(categoria_id: int, datos: CategoriaGuardar, db: BD, _: SoloAdmin):
     return service.actualizar_categoria(db, categoria_id, datos)
 
 
@@ -87,8 +89,10 @@ def eliminar_categoria(categoria_id: int, db: BD, _: SoloAdmin) -> None:
 
 
 @router.get("/sabores", response_model=list[CatalogoSalida])
-def listar_sabores(db: BD, _: VeCatalogos, solo_activos: bool = False):
-    return service.listar_sabores(db, solo_activos)
+def listar_sabores(
+    db: BD, _: VeCatalogos, solo_activos: bool = False, categoria_id: int | None = None
+):
+    return service.listar_sabores(db, solo_activos, categoria_id)
 
 
 @router.post("/sabores", response_model=CatalogoSalida, status_code=status.HTTP_201_CREATED)

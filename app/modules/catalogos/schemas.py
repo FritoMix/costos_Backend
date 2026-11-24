@@ -24,6 +24,16 @@ class CatalogoGuardar(BaseModel):
     activo: bool = True
 
 
+class CategoriaSalida(CatalogoSalida):
+    # Sabores permitidos (V23). Vacio: acepta todos los sabores activos.
+    sabor_ids: list[int] = []
+
+
+class CategoriaGuardar(CatalogoGuardar):
+    # None (cliente viejo que no lo envia): conserva los sabores que tenia.
+    sabor_ids: list[int] | None = None
+
+
 # --- Turnos ----------------------------------------------------------------
 
 

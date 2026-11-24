@@ -72,6 +72,13 @@ def _aplicar_datos(
         raise ErrorDeValidacion("El sabor seleccionado no es válido.")
     if not sabor.activo and recepcion.sabor_id != datos.sabor_id:
         raise ErrorDeValidacion("El sabor seleccionado está inactivo. Elige un sabor activo.")
+    # A prueba de errores (V23): solo los sabores de la categoria de la orden.
+    permitidos = {s.id for s in orden.categoria.sabores} if orden.categoria else set()
+    if permitidos and sabor.id not in permitidos and recepcion.sabor_id != datos.sabor_id:
+        raise ErrorDeValidacion(
+            f'El sabor "{sabor.nombre}" no es de la categoría {orden.categoria.nombre}. '
+            "Elige uno de sus sabores o asígnalo en Catálogos → Categorías."
+        )
 
     pesos = [peso for peso in datos.pesos_canastillas if peso is not None and peso > 0]
     if not pesos:

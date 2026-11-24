@@ -20,5 +20,6 @@
   "V19__destino_producto_y_cierre_automatico.sql": "ac315e40d3bd06bf07a1e63f1844317849c68126af285d88525b97fd250d0c07",
   "V20__formula_de_la_noche.sql": "c2de174906d45dcf446564266d0c9f57c49959361870d2563d562b9e143671dc",
   "V21__lineas_de_produccion.sql": "5e1981f94086060b95093ee201be04d8934732879eea0fb7660c8621a519b414",
-  "V22__catalogo_lineas_nuevas.sql": "6655b15fa14abce1e5b80b4e2d6526d4e200c6c6d87ebd6e0bffa39017b0672c"
+  "V22__catalogo_lineas_nuevas.sql": "6655b15fa14abce1e5b80b4e2d6526d4e200c6c6d87ebd6e0bffa39017b0672c",
+  "V23__sabores_por_categoria.sql": "dd2d7378ba45f53181939909e2e30a3f65b52b270661f94834647ecdb25bc15d"
 }
