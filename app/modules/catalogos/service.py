@@ -11,7 +11,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.errores import ConflictoDeDatos, ErrorDeValidacion, RecursoNoEncontrado
 from app.modules.catalogos.models import (
@@ -66,7 +66,11 @@ def _existe(db: Session, consulta) -> bool:
 
 
 def listar_categorias(db: Session, solo_activas: bool = False) -> list[CategoriaProducto]:
-    consulta = select(CategoriaProducto).order_by(CategoriaProducto.nombre)
+    consulta = (
+        select(CategoriaProducto)
+        .options(selectinload(CategoriaProducto.sabores))
+        .order_by(CategoriaProducto.nombre)
+    )
     if solo_activas:
         consulta = consulta.where(CategoriaProducto.activo == True)
     return list(db.scalars(consulta).all())

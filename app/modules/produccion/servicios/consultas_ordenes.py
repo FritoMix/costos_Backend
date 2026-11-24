@@ -5,16 +5,29 @@ orden antes de consultar disponibilidad y conservan el índice único final.
 """
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.modules.catalogos.models import Horno, Producto
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.models import EstadoOrden, OrdenProduccion
 from app.modules.produccion.servicios.lectura import opciones_listado
 
+# Rendimiento: turno, horno, producto, categoria y personas de la orden en la
+# misma consulta, y no una consulta por cada uno.
+_OPCIONES_ORDEN = (
+    joinedload(OrdenProduccion.supervisor),
+    joinedload(OrdenProduccion.turno),
+    joinedload(OrdenProduccion.horno).joinedload(Horno.linea),
+    joinedload(OrdenProduccion.variedad),
+    joinedload(OrdenProduccion.producto).joinedload(Producto.categoria),
+    joinedload(OrdenProduccion.categoria),
+    joinedload(OrdenProduccion.formula_actualizada_por),
+)
+
 
 def obtener_orden(db: Session, orden_id: int) -> OrdenProduccion:
-    orden = db.get(OrdenProduccion, orden_id)
+    orden = db.get(OrdenProduccion, orden_id, options=_OPCIONES_ORDEN)
     if orden is None or orden.eliminado:
         raise RecursoNoEncontrado("Esa orden no existe.")
     return orden

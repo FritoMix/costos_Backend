@@ -320,10 +320,12 @@ def detalle(orden_id: int, db: BD, _: VeOrdenes):
         totales=servicio_totales.calcular_totales(db, orden),
         formula=servicio_formula.obtener(db, orden),
         registros_horno=[
-            RegistroHornoSalida.model_validate(r) for r in servicio_horno.listar_registros(db, orden.id)
+            RegistroHornoSalida.model_validate(r)
+            for r in servicio_horno.listar_registros(db, orden.id, orden)
         ],
         recepciones=[
-            RecepcionSalida.model_validate(r) for r in servicio_saborizado.listar_recepciones(db, orden.id)
+            RecepcionSalida.model_validate(r)
+            for r in servicio_saborizado.listar_recepciones(db, orden.id, orden)
         ],
     )
 
@@ -397,8 +399,8 @@ def proyectar_formula(orden_id: int, datos: FormulaProyeccionGuardar, db: BD, _:
 
 @router.get("/{orden_id}/registros-horno", response_model=list[RegistroHornoSalida])
 def listar_registros_horno(orden_id: int, db: BD, _: VeOrdenes):
-    servicio_ordenes.obtener_orden(db, orden_id)
-    return servicio_horno.listar_registros(db, orden_id)
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_horno.listar_registros(db, orden_id, orden)
 
 
 @router.post(
@@ -448,8 +450,8 @@ def eliminar_registro_horno(orden_id: int, registro_id: int, db: BD, admin: Solo
 
 @router.get("/{orden_id}/recepciones", response_model=list[RecepcionSalida])
 def listar_recepciones(orden_id: int, db: BD, _: VeOrdenes):
-    servicio_ordenes.obtener_orden(db, orden_id)
-    return servicio_saborizado.listar_recepciones(db, orden_id)
+    orden = servicio_ordenes.obtener_orden(db, orden_id)
+    return servicio_saborizado.listar_recepciones(db, orden_id, orden)
 
 
 @router.post("/{orden_id}/recepciones", response_model=RecepcionSalida, status_code=status.HTTP_201_CREATED)

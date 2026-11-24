@@ -464,7 +464,10 @@ class RegistroHorno(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     orden_id: Mapped[int] = mapped_column(ForeignKey("ordenes_produccion.id"))
-    orden: Mapped["OrdenProduccion"] = relationship(lazy="selectin")
+    # Rendimiento: "select" y no "selectin". La orden casi siempre ya esta en
+    # la sesion, asi que se toma de ahi sin consultar; con "selectin" cada
+    # lista de registros volvia a cargar la orden entera con sus relaciones.
+    orden: Mapped["OrdenProduccion"] = relationship()
 
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
     usuario: Mapped["Usuario"] = relationship(foreign_keys=[usuario_id], lazy="selectin")
@@ -660,7 +663,10 @@ class RegistroSaborizado(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     orden_id: Mapped[int] = mapped_column(ForeignKey("ordenes_produccion.id"))
-    orden: Mapped["OrdenProduccion"] = relationship(lazy="selectin")
+    # Rendimiento: "select" y no "selectin". La orden casi siempre ya esta en
+    # la sesion, asi que se toma de ahi sin consultar; con "selectin" cada
+    # lista de registros volvia a cargar la orden entera con sus relaciones.
+    orden: Mapped["OrdenProduccion"] = relationship()
 
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
     usuario: Mapped["Usuario"] = relationship(foreign_keys=[usuario_id], lazy="selectin")

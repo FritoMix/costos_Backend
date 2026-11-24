@@ -25,6 +25,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
@@ -108,8 +109,10 @@ def calcular_aceite(
     )
 
 
-def listar_registros(db: Session, orden_id: int) -> list[RegistroHorno]:
-    return list(
+def listar_registros(
+    db: Session, orden_id: int, orden: OrdenProduccion | None = None
+) -> list[RegistroHorno]:
+    registros = list(
         db.scalars(
             select(RegistroHorno)
             .where(RegistroHorno.orden_id == orden_id, RegistroHorno.eliminado == False)
@@ -118,6 +121,23 @@ def listar_registros(db: Session, orden_id: int) -> list[RegistroHorno]:
         .unique()
         .all()
     )
+    enlazar_orden(db, orden_id, registros, orden)
+    return registros
+
+
+def enlazar_orden(
+    db: Session, orden_id: int, registros: list, orden: OrdenProduccion | None = None
+) -> None:
+    """
+    Rendimiento: deja la orden ya enlazada a cada registro. Sin esto, al armar
+    la respuesta (cuando la orden ya salio de memoria) cada registro la volvia
+    a pedir a la base con todas sus relaciones.
+    """
+    if not registros:
+        return
+    orden = orden or db.get(OrdenProduccion, orden_id)
+    for registro in registros:
+        set_committed_value(registro, "orden", orden)
 
 
 def obtener_registro(db: Session, registro_id: int) -> RegistroHorno:
