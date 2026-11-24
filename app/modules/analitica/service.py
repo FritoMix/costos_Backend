@@ -18,7 +18,7 @@ Lo eliminado (borrado suave) nunca entra en estos numeros.
 from decimal import Decimal
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.cache import TTL, cache_ttl
 from app.modules.analitica.schemas import (
@@ -402,6 +402,8 @@ def obtener_detalle_baches(
     registros = list(
         db.scalars(
             select(RegistroHorno)
+            # Las ordenes de la pagina en una sola consulta (no una por tanda).
+            .options(selectinload(RegistroHorno.orden))
             .where(
                 RegistroHorno.orden_id.in_(select(ordenes.c.id)),
                 RegistroHorno.eliminado == False,

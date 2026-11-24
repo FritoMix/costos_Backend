@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
@@ -140,6 +141,10 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None if settings.es_produccion else "/openapi.json",
 )
+
+# Rendimiento: las respuestas de mas de 1 KB viajan comprimidas a las
+# tabletas (las listas pasan de ~600 KB a unas decenas de KB).
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 # El limite de peticiones se aplica a toda la app.
 app.state.limiter = limiter

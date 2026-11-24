@@ -38,8 +38,10 @@ from app.modules.produccion.servicios.tandas import (
 )
 
 
-def listar_recepciones(db: Session, orden_id: int) -> list[RegistroSaborizado]:
-    return list(
+def listar_recepciones(
+    db: Session, orden_id: int, orden: OrdenProduccion | None = None
+) -> list[RegistroSaborizado]:
+    recepciones = list(
         db.scalars(
             select(RegistroSaborizado)
             .where(
@@ -51,6 +53,10 @@ def listar_recepciones(db: Session, orden_id: int) -> list[RegistroSaborizado]:
         .unique()
         .all()
     )
+    from app.modules.produccion.servicios.horno import enlazar_orden
+
+    enlazar_orden(db, orden_id, recepciones, orden)
+    return recepciones
 
 
 def obtener_recepcion(db: Session, recepcion_id: int) -> RegistroSaborizado:

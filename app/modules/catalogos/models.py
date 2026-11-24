@@ -55,7 +55,9 @@ class CategoriaProducto(Base):
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     productos: Mapped[list["Producto"]] = relationship(back_populates="categoria")
-    sabores: Mapped[list["Sabor"]] = relationship(secondary=categoria_sabor, lazy="selectin")
+    # Se carga solo cuando se usa (catalogo de categorias y saborizado); no con
+    # cada orden que trae su categoria.
+    sabores: Mapped[list["Sabor"]] = relationship(secondary=categoria_sabor)
 
     @property
     def sabor_ids(self) -> list[int]:
