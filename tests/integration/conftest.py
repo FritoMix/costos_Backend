@@ -66,6 +66,8 @@ def datos_base(db: Session) -> SimpleNamespace:
         peso_estandar_canastilla_kg=Decimal("6.00"),
     )
     sabor = Sabor(nombre="Natural de Prueba", activo=True)
+    # V23: las categorias de papa solo aceptan sus sabores; el de prueba es uno.
+    categoria.sabores.append(sabor)
     referencia_papa = ReferenciaPapa(
         nombre="Papa de Prueba",
         tipo="Papa pareja",

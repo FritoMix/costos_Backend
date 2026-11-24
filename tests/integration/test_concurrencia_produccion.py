@@ -65,6 +65,7 @@ def escenario(engine_integracion):
                 nombre="Referencia concurrente", activo=True, peso_promedio_bulto_kg=Decimal("50")
             )
             sabor = Sabor(nombre="Sabor concurrente", activo=True)
+            categoria.sabores.append(sabor)
             db.add_all([usuario, equipo, producto, referencia, sabor])
             db.commit()
             datos = OrdenGuardar(

@@ -37,6 +37,16 @@ horno_categoria = Table(
 )
 
 
+# Sabores que se pueden usar en cada categoria (V23). Una categoria sin
+# sabores asignados acepta todos los sabores activos.
+categoria_sabor = Table(
+    "categoria_sabor",
+    Base.metadata,
+    Column("categoria_id", ForeignKey("categorias_producto.id", ondelete="CASCADE"), primary_key=True),
+    Column("sabor_id", ForeignKey("sabores.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 class CategoriaProducto(Base):
     __tablename__ = "categorias_producto"
 
@@ -45,6 +55,11 @@ class CategoriaProducto(Base):
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     productos: Mapped[list["Producto"]] = relationship(back_populates="categoria")
+    sabores: Mapped[list["Sabor"]] = relationship(secondary=categoria_sabor, lazy="selectin")
+
+    @property
+    def sabor_ids(self) -> list[int]:
+        return sorted(s.id for s in self.sabores)
 
     def __repr__(self) -> str:
         return f"<CategoriaProducto {self.nombre}>"

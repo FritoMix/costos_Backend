@@ -30,6 +30,7 @@ from app.modules.catalogos.models import (
 )
 from app.modules.catalogos.schemas import (
     CatalogoGuardar,
+    CategoriaGuardar,
     ConfiguracionGuardar,
     HornoGuardar,
     MuestraDensidadCrear,
@@ -71,22 +72,36 @@ def listar_categorias(db: Session, solo_activas: bool = False) -> list[Categoria
     return list(db.scalars(consulta).all())
 
 
-def crear_categoria(db: Session, datos: CatalogoGuardar) -> CategoriaProducto:
+def _aplicar_sabores(db: Session, categoria: CategoriaProducto, sabor_ids: list[int] | None) -> None:
+    if sabor_ids is None:
+        return
+    sabores = []
+    for sabor_id in dict.fromkeys(sabor_ids):
+        sabor = db.get(Sabor, sabor_id)
+        if sabor is None:
+            raise ErrorDeValidacion("Uno de los sabores seleccionados no existe.")
+        sabores.append(sabor)
+    categoria.sabores = sabores
+
+
+def crear_categoria(db: Session, datos: CategoriaGuardar) -> CategoriaProducto:
     nombre = datos.nombre.strip()
     _nombre_libre(db, CategoriaProducto, CategoriaProducto.nombre, nombre, None)
     categoria = CategoriaProducto(nombre=nombre, activo=datos.activo)
+    _aplicar_sabores(db, categoria, datos.sabor_ids)
     db.add(categoria)
     db.commit()
     db.refresh(categoria)
     return categoria
 
 
-def actualizar_categoria(db: Session, categoria_id: int, datos: CatalogoGuardar) -> CategoriaProducto:
+def actualizar_categoria(db: Session, categoria_id: int, datos: CategoriaGuardar) -> CategoriaProducto:
     categoria = _obtener(db, CategoriaProducto, categoria_id, "Esa categoría")
     nombre = datos.nombre.strip()
     _nombre_libre(db, CategoriaProducto, CategoriaProducto.nombre, nombre, categoria_id)
     categoria.nombre = nombre
     categoria.activo = datos.activo
+    _aplicar_sabores(db, categoria, datos.sabor_ids)
     db.commit()
     db.refresh(categoria)
     return categoria
@@ -116,11 +131,20 @@ def eliminar_categoria(db: Session, categoria_id: int) -> None:
 # --- Sabores ---------------------------------------------------------------
 
 
-def listar_sabores(db: Session, solo_activos: bool = False) -> list[Sabor]:
+def listar_sabores(
+    db: Session, solo_activos: bool = False, categoria_id: int | None = None
+) -> list[Sabor]:
+    """Sabores; con categoria_id, solo los de esa categoria (si tiene asignados)."""
     consulta = select(Sabor).order_by(Sabor.nombre)
     if solo_activos:
         consulta = consulta.where(Sabor.activo == True)
-    return list(db.scalars(consulta).all())
+    sabores = list(db.scalars(consulta).all())
+    if categoria_id is not None:
+        categoria = db.get(CategoriaProducto, categoria_id)
+        permitidos = {s.id for s in categoria.sabores} if categoria else set()
+        if permitidos:
+            sabores = [s for s in sabores if s.id in permitidos]
+    return sabores
 
 
 def crear_sabor(db: Session, datos: CatalogoGuardar) -> Sabor:
