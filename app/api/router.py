@@ -5,21 +5,25 @@ Es el unico punto donde se ve el mapa completo de la API: cada modulo
 aporta sus rutas y nada mas.
 """
 
+import logging
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.limite import limiter
 from app.db.session import engine, get_db
 from app.modules.analitica.router import router as router_analitica
 from app.modules.bodega.router import router as router_bodega
 from app.modules.bodega.router import router_proyeccion as router_bodega_proyeccion
 from app.modules.catalogos.router import router as router_catalogos
+from app.modules.identidad.dependencias import UsuarioAutenticado
 from app.modules.identidad.router import router_auth, router_usuarios
 from app.modules.notificaciones.router import router as router_notificaciones
 from app.modules.produccion.router import router as router_produccion
@@ -93,3 +97,21 @@ def listo():
             status_code=503, content={"estado": "no_disponible"}, headers={"Cache-Control": "no-store"}
         )
     return JSONResponse(content={"estado": "ok"}, headers={"Cache-Control": "no-store"})
+
+
+class MedicionTurno(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operacion_id: str = Field(pattern=r"^[a-f0-9]{32}$", min_length=32, max_length=32)
+    accion: Literal["abrir_kpi", "abrir_nueva_orden", "guardar_tanda", "guardar_recepcion"]
+    resultado: Literal["ok", "error"]
+    primera: bool
+    duracion_ms: int = Field(ge=0, le=86_400_000)
+
+
+@api_router.post("/mediciones/turno", status_code=204, tags=["Operación"])
+@limiter.limit("30/minute")
+def medir_turno(request: Request, datos: MedicionTurno, _: UsuarioAutenticado) -> Response:
+    logging.getLogger("datacontrol.turno").info(
+        "medicion_turno %s", datos.model_dump_json()
+    )
+    return Response(status_code=204)

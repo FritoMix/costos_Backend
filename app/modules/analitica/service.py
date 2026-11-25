@@ -17,7 +17,7 @@ Lo eliminado (borrado suave) nunca entra en estos numeros.
 
 from decimal import Decimal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, true
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.cache import TTL, cache_ttl
@@ -89,61 +89,39 @@ def _desglose(filas) -> list[Desglose]:
     return [Desglose(etiqueta=etiqueta, valor=valor) for etiqueta, valor in filas]
 
 
-def _indicadores_cacheado(filtros: FiltrosAnalisis) -> IndicadoresSalida:
-    """Version sin cache con su propia sesion, para no ensuciar la clave de
-    cache con la sesion de cada request (que cambia siempre)."""
-    from app.db.session import SessionLocal
-
-    db = SessionLocal()
-    try:
-        return _calcular_indicadores_interno(db, filtros)
-    finally:
-        db.close()
-
-
-@cache_ttl(TTL.TREINTA_SEGUNDOS)
-def _indicadores_cached_por_filtros(filtros: FiltrosAnalisis) -> dict:
-    """Guarda el resultado cacheado como dict (pydantic son inmutables)."""
-    resultado = _indicadores_cacheado(filtros)
-    return resultado.model_dump()
+@cache_ttl(TTL.TREINTA_SEGUNDOS, clave_por=lambda db, filtros: filtros.model_dump_json())
+def _indicadores_cached_por_filtros(db: Session, filtros: FiltrosAnalisis) -> dict:
+    return _calcular_indicadores_interno(db, filtros).model_dump()
 
 
 def calcular_indicadores(db: Session, filtros: FiltrosAnalisis) -> IndicadoresSalida:
-    """Punto de entrada publico: cachea 30s por filtros y usa la sesion que
-    recibe solo cuando la cache esta fria."""
-    resultado = _indicadores_cached_por_filtros(filtros)
-    return IndicadoresSalida.model_validate(resultado)
+    return IndicadoresSalida.model_validate(_indicadores_cached_por_filtros(db, filtros))
 
 
 def _calcular_indicadores_interno(db: Session, filtros: FiltrosAnalisis) -> IndicadoresSalida:
-    ordenes = consulta_ordenes_filtradas(filtros).subquery()
+    ordenes = consulta_ordenes_filtradas(filtros).cte("ordenes_kpi")
     ids_ordenes = select(ordenes.c.id)
 
-    numero_ordenes = db.scalar(select(func.count()).select_from(ordenes)) or 0
-
-    # --- Totales de horno ---
-    kg_crudos, bultos, kg_aceite = db.execute(
-        select(
-            func.coalesce(func.sum(RegistroHorno.kg_crudos_calculados), 0),
-            func.coalesce(func.sum(RegistroHorno.cantidad_bultos), 0),
-            func.coalesce(func.sum(RegistroHorno.kg_aceite_consumido), 0),
-        ).where(RegistroHorno.orden_id.in_(ids_ordenes), RegistroHorno.eliminado == False)
-    ).one()
-
-    kg_desperdicio = db.scalar(
+    # Cada agregado devuelve una fila. Unir esos resultados conserva los totales
+    # aunque una orden tenga varias tandas, recepciones y pérdidas.
+    horno = select(
+        func.coalesce(func.sum(RegistroHorno.kg_crudos_calculados), 0).label("crudos"),
+        func.coalesce(func.sum(RegistroHorno.cantidad_bultos), 0).label("bultos"),
+        func.coalesce(func.sum(RegistroHorno.kg_aceite_consumido), 0).label("aceite"),
+    ).where(RegistroHorno.orden_id.in_(ids_ordenes), RegistroHorno.eliminado == False).subquery()
+    saborizado = select(
+        func.coalesce(func.sum(RegistroSaborizado.kg_recibidos), 0).label("fritos"),
+        func.coalesce(func.sum(RegistroSaborizado.cantidad_sabor_kg), 0).label("sabor"),
+    ).where(RegistroSaborizado.orden_id.in_(ids_ordenes), RegistroSaborizado.eliminado == False).subquery()
+    merma = (
         select(func.coalesce(func.sum(Desperdicio.cantidad_kg), 0))
         .join(RegistroHorno, Desperdicio.registro_horno_id == RegistroHorno.id)
         .where(RegistroHorno.orden_id.in_(ids_ordenes), RegistroHorno.eliminado == False)
-    ) or CERO
-
-    # --- Totales de saborizado ---
-    kg_papa_frita, kg_sabor = db.execute(
-        select(
-            func.coalesce(func.sum(RegistroSaborizado.kg_recibidos), 0),
-            func.coalesce(func.sum(RegistroSaborizado.cantidad_sabor_kg), 0),
-        ).where(
-            RegistroSaborizado.orden_id.in_(ids_ordenes), RegistroSaborizado.eliminado == False
-        )
+        .scalar_subquery()
+    )
+    numero_ordenes, kg_crudos, bultos, kg_aceite, kg_papa_frita, kg_sabor, kg_desperdicio = db.execute(
+        select(select(func.count()).select_from(ordenes).scalar_subquery(), horno, saborizado, merma)
+        .select_from(horno.join(saborizado, true()))
     ).one()
 
     # --- Indicadores ---
@@ -156,7 +134,7 @@ def _calcular_indicadores_interno(db: Session, filtros: FiltrosAnalisis) -> Indi
         absorcion = (kg_aceite / kg_papa_frita * 100).quantize(Decimal("0.01"))
 
     # --- Desgloses para las graficas (produccion = kg de papa frita) ---
-    def suma_papa_frita_por(columna, tabla, condicion_join, orden_por=None):
+    def suma_papa_frita_por(columna, tabla, condicion_join, *, top_productos=False):
         consulta = (
             select(columna, func.coalesce(func.sum(RegistroSaborizado.kg_recibidos), 0))
             .select_from(RegistroSaborizado)
@@ -167,8 +145,11 @@ def _calcular_indicadores_interno(db: Session, filtros: FiltrosAnalisis) -> Indi
                 RegistroSaborizado.eliminado == False,
             )
             .group_by(columna)
-            .order_by(orden_por if orden_por is not None else columna)
         )
+        if top_productos:
+            consulta = consulta.order_by(func.sum(RegistroSaborizado.kg_recibidos).desc(), columna).limit(10)
+        else:
+            consulta = consulta.order_by(columna)
         return db.execute(consulta).all()
 
     # kg programados por horno (para la meta)
@@ -199,8 +180,8 @@ def _calcular_indicadores_interno(db: Session, filtros: FiltrosAnalisis) -> Indi
         Producto.nombre_comercial,
         Producto,
         OrdenProduccion.producto_id == Producto.id,
-        orden_por=func.sum(RegistroSaborizado.kg_recibidos).desc(),
-    )[:10]
+        top_productos=True,
+    )
 
     por_horno = [
         Desglose(etiqueta=etiqueta, valor=valor, meta=meta_por_horno.get(etiqueta))

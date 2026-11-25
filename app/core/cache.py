@@ -24,7 +24,9 @@ def _clave(args: tuple, kwargs: dict) -> str:
     return repr((args, sorted(kwargs.items(), key=lambda kv: kv[0])))
 
 
-def cache_ttl(segundos: int | float, *, maxsize: int = MAX_ENTRADAS) -> Callable:
+def cache_ttl(
+    segundos: int | float, *, maxsize: int = MAX_ENTRADAS, clave_por: Callable | None = None
+) -> Callable:
     """
     Decorador: cachea el resultado durante `segundos`.
 
@@ -41,7 +43,7 @@ def cache_ttl(segundos: int | float, *, maxsize: int = MAX_ENTRADAS) -> Callable
         cerrojo = threading.Lock()
 
         def envuelto(*args, **kwargs) -> Any:
-            clave = _clave(args, kwargs)
+            clave = clave_por(*args, **kwargs) if clave_por else _clave(args, kwargs)
             ahora = time.monotonic()
 
             with cerrojo:

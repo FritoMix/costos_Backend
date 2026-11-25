@@ -69,12 +69,38 @@ jobs:
       - name: Pruebas con cobertura (pytest)
         run: pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=70
 
+      - name: Comparar indicadores con la base del PR en PostgreSQL local
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PGHOST: localhost
+          PGUSER: test
+          PGPASSWORD: test
+        run: |
+          git fetch --depth=1 origin "$BASE_SHA"
+          if git diff --quiet "$BASE_SHA" HEAD -- app/modules/analitica/service.py app/core/cache.py; then
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/kpi-base" test-results
+          git archive "$BASE_SHA" app | tar -x -C "$RUNNER_TEMP/kpi-base"
+          createdb --template=datacontrol_test datacontrol_kpi_test
+          psql -X -v ON_ERROR_STOP=1 -d datacontrol_kpi_test -f loadtests/kpi-datos.sql
+          export DATABASE_URL="postgresql+psycopg://test:test@localhost:5432/datacontrol_kpi_test"
+          PYTHONPATH="$RUNNER_TEMP/kpi-base" python loadtests/medir_kpi.py test-results/kpi-base.json
+          PYTHONPATH="$PWD" python loadtests/medir_kpi.py test-results/kpi-cambio.json
+          python - <<'PYTHON'
+          import json
+          from pathlib import Path
+          base, cambio = (json.loads(Path(f"test-results/kpi-{ref}.json").read_text()) for ref in ("base", "cambio"))
+          assert base["sha256_indicadores"] == cambio["sha256_indicadores"], "Los indicadores cambiaron"
+          PYTHON
+
       - name: Publicar mediciones de consultas
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: consultas-listados
-          path: test-results/consultas-listados.json
+          path: test-results/*.json
           if-no-files-found: ignore
           retention-days: 14
 

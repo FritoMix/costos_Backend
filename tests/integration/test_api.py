@@ -528,19 +528,8 @@ def test_usuarios_crud_y_permisos(cliente: TestClient, datos_base):
 
 
 def test_flujo_de_orden_registros_notificaciones_y_analitica(
-    cliente: TestClient, datos_base, db: Session, monkeypatch
+    cliente: TestClient, datos_base, db: Session
 ):
-    # Los indicadores usan su propia sesion para el cache; en la prueba se
-    # calculan sobre la sesion transaccional para no tocar otra base.
-    from app.modules.analitica import service as analitica_service
-
-    monkeypatch.setattr(
-        analitica_service,
-        "calcular_indicadores",
-        lambda sesion, filtros: analitica_service._calcular_indicadores_interno(
-            sesion, filtros
-        ),
-    )
     _login(cliente)
 
     orden = _json(
@@ -672,7 +661,13 @@ def test_flujo_de_orden_registros_notificaciones_y_analitica(
     operario.close()
 
     # Analitica: lectura, filtros, exportaciones y permisos.
-    _json(cliente.get(f"{API}/analitica/indicadores"))
+    parametros = {"producto_id": datos_base.producto.id}
+    indicadores = _json(cliente.get(f"{API}/analitica/indicadores", params=parametros))
+    assert indicadores["numero_ordenes"] == 1
+    assert Decimal(indicadores["kg_papa_frita"]) == Decimal("16.50")
+    assert indicadores == _json(cliente.get(f"{API}/analitica/indicadores", params=parametros))
+    vacios = _json(cliente.get(f"{API}/analitica/indicadores", params={"producto_id": 999999}))
+    assert vacios["numero_ordenes"] == 0
     _json(cliente.get(f"{API}/analitica/por-categoria"))
     tandas = _json(cliente.get(f"{API}/analitica/baches"))
     assert len(tandas) == 1
@@ -1146,3 +1141,14 @@ def test_api_lineas_variedades_y_recuperar_password(cliente: TestClient, db: Ses
     usuario = _json(respuesta)["usuario"]
     assert usuario["debe_cambiar_password"] is True
     assert usuario["linea"] is None or usuario["linea"]["codigo"] == "papa"
+
+
+def test_medicion_turno_validada_y_autenticada(cliente: TestClient, caplog):
+    ruta = f"{API}/mediciones/turno"
+    datos = dict(operacion_id="ab" * 16, accion="abrir_kpi", resultado="ok", primera=True, duracion_ms=42)
+    assert cliente.post(ruta, json=datos).status_code == 401
+    _login(cliente, "operario_horno_prueba")
+    with caplog.at_level("INFO", logger="datacontrol.turno"):
+        assert cliente.post(ruta, json=datos).status_code == 204
+    assert "medicion_turno" in caplog.text
+    assert cliente.post(ruta, json={**datos, "accion": "desconocida"}).status_code == 422
