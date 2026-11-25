@@ -143,3 +143,30 @@ de 50, cancela solicitudes obsoletas al cambiar filtros y ofrece reintento en er
 El endpoint anterior /ordenes conserva su lista limitada a 500 para clientes viejos.
 La paginación de otros catálogos/reportes y las mediciones de rendimiento siguen
 siendo trabajo posterior; no se ha realizado una prueba de carga sobre Render.
+
+## Medición de las operaciones de un turno
+
+Integrar y desplegar primero el backend y después el frontend. En los logs de Render,
+filtrar por `medicion_turno` durante el turno en la zona America/Bogota. Cada registro
+incluye acción, resultado, duración en milisegundos y un identificador aleatorio.
+Buscar el mismo valor en `operacion=...` para ver las peticiones asociadas con sus
+tiempos del servidor y sus identificadores individuales. Las peticiones paralelas se solapan.
+
+- `abrir_kpi` mide hasta la respuesta de los indicadores principales. El desglose de
+  categorías y las tandas se cargan de forma independiente.
+- `abrir_nueva_orden` mide hasta que se cargan los catálogos y se habilita el asistente.
+- `guardar_tanda` y `guardar_recepcion` miden el envío válido hasta que se recibe su
+  confirmación o error. Las correcciones y las validaciones previas se excluyen.
+
+Las aperturas empiezan en el inicio de la navegación Angular cuando está disponible.
+La duración termina al procesar la respuesta en la aplicación, antes del repintado.
+`primera` distingue el primer intento de esa acción en la pestaña ese día.
+Las visitas abandonadas o los registros perdidos por desconexión pueden quedar fuera.
+La medición es auxiliar, no garantiza un registro por cada operación de negocio.
+
+Para comparar turnos, agrupar por acción y primera/repetida. Informar el número de
+muestras y errores. Sobre los éxitos, ordenar las duraciones y tomar el dato en
+la posición superior de 0,95 × número de muestras (p95). Comparar con turnos de
+volumen similar. Para la comparación de SQL de KPI en CI, consultar el paso de
+comparación y los JSON del artefacto de mediciones. Incluye una lectura previa
+en la sesión y separa el tiempo total del empleado en ejecutar SQL.

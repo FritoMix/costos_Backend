@@ -198,13 +198,16 @@ async def middleware_trazabilidad(request, call_next):
         request.url.path not in {"/api/v1/salud", "/api/v1/vivo", "/api/v1/listo"}
         or respuesta.status_code >= 400
     ):
+        operacion = request.headers.get("X-Operacion-ID", "")
+        operacion = operacion if re.fullmatch(r"[a-f0-9]{32}", operacion) else "-"
         logger.info(
-            "[%s] %s %s -> %d (%.1f ms)",
+            "[%s] %s %s -> %d (%.1f ms) operacion=%s",
             request_id,
             request.method,
             request.url.path,
             respuesta.status_code,
             duracion_ms,
+            operacion,
         )
     return respuesta
 
