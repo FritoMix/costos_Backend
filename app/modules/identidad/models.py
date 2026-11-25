@@ -108,3 +108,16 @@ class IntentoLogin(Base):
     fallos: Mapped[int] = mapped_column(default=0)
     ultimo_intento: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     bloqueado_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CodigoRecuperacion(Base):
+    """Codigo de un solo uso para que el administrador recupere su acceso (V25)."""
+
+    __tablename__ = "codigos_recuperacion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id", ondelete="CASCADE"))
+    identificador: Mapped[str] = mapped_column(String(4))
+    codigo_hash: Mapped[str] = mapped_column(String(100))
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    usado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
