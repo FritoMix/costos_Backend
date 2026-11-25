@@ -64,3 +64,16 @@ Para Render, MIGRAR_AL_ARRANCAR=true (valor predeterminado).
 Pruebas: revocación/replay, sesiones independientes, inactividad frente a polling,
 heartbeat sin ampliar el vencimiento absoluto, origen, espera progresiva,
 concurrencia de intentos y migraciones; más las suites previas y E2E.
+
+## Códigos de recuperación del administrador (V25)
+
+Si el administrador olvida su contraseña ya no hace falta entrar a Render:
+
+1. Desde **Mi cuenta → Códigos de recuperación** genera 8 códigos de un solo
+   uso (pide la contraseña actual) y los guarda impresos en un lugar seguro.
+2. Si la olvida, en **¿Olvidaste tu contraseña? → Tengo un código** escribe su
+   usuario, un código y la contraseña nueva. Se cierran todas sus sesiones.
+
+Los códigos se guardan con bcrypt; tras 5 intentos fallidos la recuperación se
+bloquea por tiempo creciente. Generar códigos nuevos anula los anteriores.
+`ADMIN_RESET_PASSWORD` sigue disponible como último recurso desde Render.
