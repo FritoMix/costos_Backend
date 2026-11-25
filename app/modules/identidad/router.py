@@ -13,13 +13,17 @@ from app.core.config import settings
 from app.core.limite import obtener_ip_cliente
 from app.core.seguridad import borrar_cookie_sesion, poner_cookie_sesion
 from app.db.session import get_db
-from app.modules.identidad import service, sesiones
+from app.modules.identidad import recuperacion, service, sesiones
 from app.modules.identidad.dependencias import UsuarioAutenticado, requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.identidad.schemas import (
     CambiarPasswordPeticion,
+    CodigosGeneradosSalida,
+    EstadoCodigosSalida,
+    GenerarCodigosPeticion,
     LoginPeticion,
     PasswordTemporalSalida,
+    RecuperarConCodigoPeticion,
     RolSalida,
     SesionSalida,
     SolicitudRecuperacion,
@@ -102,6 +106,27 @@ def olvide_password(datos: SolicitudRecuperacion, db: BD) -> dict:
         "mensaje": "Listo. Le avisamos al administrador y al supervisor: ellos te darán una "
         "contraseña temporal."
     }
+
+
+@router_auth.get("/codigos-recuperacion", response_model=EstadoCodigosSalida)
+def estado_codigos(usuario: SoloAdmin, db: BD) -> dict:
+    """Cuantos codigos de recuperacion le quedan al administrador (V25)."""
+    return recuperacion.estado(db, usuario)
+
+
+@router_auth.post("/codigos-recuperacion", response_model=CodigosGeneradosSalida)
+def generar_codigos(datos: GenerarCodigosPeticion, usuario: SoloAdmin, db: BD) -> CodigosGeneradosSalida:
+    """Reemplaza los codigos anteriores por 8 nuevos. Exige la contraseña actual."""
+    return CodigosGeneradosSalida(codigos=recuperacion.generar(db, usuario, datos.password_actual))
+
+
+@router_auth.post("/recuperar-con-codigo")
+def recuperar_con_codigo(datos: RecuperarConCodigoPeticion, db: BD, request: Request) -> dict:
+    """Sin sesion: usuario + codigo de recuperacion + contraseña nueva."""
+    quedan = recuperacion.recuperar(
+        db, datos.nombre_usuario, datos.codigo, datos.password_nueva, obtener_ip_cliente(request)
+    )
+    return {"mensaje": "Listo. Ya puedes entrar con tu contraseña nueva.", "codigos_restantes": quedan}
 
 
 @router_usuarios.get("/para-recuperar", response_model=list[UsuarioSalida])

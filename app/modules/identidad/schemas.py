@@ -100,6 +100,26 @@ class SolicitudRecuperacion(BaseModel):
     nombre_usuario: str = Field(min_length=1, max_length=50)
 
 
+class GenerarCodigosPeticion(BaseModel):
+    password_actual: str = Field(min_length=1, max_length=72)
+
+
+class CodigosGeneradosSalida(BaseModel):
+    # Se muestran UNA sola vez: el administrador los imprime o anota.
+    codigos: list[str]
+
+
+class EstadoCodigosSalida(BaseModel):
+    disponibles: int
+    generados_en: datetime | None
+
+
+class RecuperarConCodigoPeticion(BaseModel):
+    nombre_usuario: str = Field(min_length=1, max_length=50)
+    codigo: str = Field(min_length=12, max_length=20)
+    password_nueva: PasswordNueva
+
+
 class PasswordTemporalSalida(BaseModel):
     # Se muestra una sola vez a quien la genero, para dictarsela a la persona.
     password_temporal: str
