@@ -103,3 +103,27 @@ Cada usuario puede registrar su correo en **Mi cuenta**. El correo queda verific
   - Cambiar o quitar el correo exige la contraseña actual.
   - Recuperar cierra todas las sesiones y avisa al correo.
 - Quien no tiene correo verificado sigue con la contraseña temporal que entrega un responsable. El administrador conserva además sus códigos impresos.
+
+### Retirada del código administrativo de V30
+
+V32 retira el código compartido de V30 si continúa disponible. La comprobación usa el prefijo
+y el hash completo aunque la cuenta haya cambiado de nombre. Un código ya utilizado conserva
+su fecha de uso. La contraseña, las sesiones y los lotes personales se conservan.
+
+**Comprobación del titular.** V30 asignó directamente un correo de recuperación. La etiqueta
+«verificado» por sí sola no acredita que el titular recibiera un mensaje. El titular debe
+comprobar el buzón por un canal conocido y completar la verificación desde **Mi cuenta** con su
+contraseña actual. Si ya lo verificó personalmente después de V30, puede conservarlo. Si la
+dirección es incorrecta, debe quitarla desde **Mi cuenta** y registrar la correcta. Si falta
+activar el envío, debe conservar el acceso por contraseña y sus códigos personales mientras
+se completa la verificación. V32 retira la marca automática cuando la dirección y la fecha coinciden con V30. Para reconocerla usa
+el registro original del código o la fecha de aplicación registrada por el migrador propio.
+También invalida los códigos de recuperación por correo pendientes de esa cuenta. Conserva la
+dirección y las verificaciones posteriores. En instalaciones con Flyway que hayan eliminado el
+registro original y carezcan de la fecha del migrador propio, la comprobación corresponde al titular.
+
+**Comprobación del despliegue.** En Render, confirmar la aplicación de V32 en el registro del
+migrador. En la base desplegada, auditar la revocación contando las filas que satisfacen el
+mismo prefijo y hash de V30, filtrando las filas con `usado_en IS NULL`. El resultado esperado es cero. La prueba del acceso del titular
+consiste en iniciar sesión con su propia contraseña. Para un rollback de la aplicación,
+conservar V32 y su checksum en el paquete de migraciones.
