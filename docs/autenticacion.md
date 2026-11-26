@@ -89,3 +89,17 @@ con la cuenta administrativa. Si necesita un lote personal, generarlo y guardarl
 Cada emisión reemplaza el lote completo, incluso desde dos sesiones simultáneas. Cambiar de rol
 invalida los códigos de esa cuenta. Si se necesita revertir la aplicación, conservar V27 y su
 checksum en la versión de corrección para que el migrador reconozca el esquema.
+
+## Correo de recuperación (V29)
+
+Cada usuario puede registrar su correo en **Mi cuenta**. El correo queda verificado cuando escribe el código de 6 dígitos que le llega. Con un correo verificado, en **¿Olvidaste tu contraseña? → Por correo** escribe su usuario, recibe un código y crea una contraseña nueva.
+
+- **Envío:** Render (plan gratis) bloquea el correo SMTP. Por eso los correos salen por un script de Google Apps Script publicado desde la cuenta de Gmail del administrador, con hasta ~100 correos al día. El administrador lo activa en Mi cuenta → Envío de correos: copia el script, que ya trae el secreto, lo implementa como aplicación web («Ejecutar como: Yo», «Cualquier usuario») y pega la URL `/exec`.
+- **Seguridad:**
+  - La app solo acepta URLs de `script.google.com`.
+  - Los códigos vencen en 15 minutos, se guardan con bcrypt y admiten 5 intentos.
+  - Se envía como máximo un código por minuto y cinco por hora.
+  - Pedir un código responde siempre lo mismo y el correo sale en segundo plano.
+  - Cambiar o quitar el correo exige la contraseña actual.
+  - Recuperar cierra todas las sesiones y avisa al correo.
+- Quien no tiene correo verificado sigue con la contraseña temporal que entrega un responsable. El administrador conserva además sus códigos impresos.

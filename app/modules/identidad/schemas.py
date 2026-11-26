@@ -50,6 +50,9 @@ class UsuarioSalida(BaseModel):
     linea: LineaRef | None = None
     # Entro con una contraseña temporal: debe crear la suya (V21).
     debe_cambiar_password: bool = False
+    # Correo de recuperacion (V29). Solo sirve si esta verificado.
+    correo: str | None = None
+    correo_verificado: bool = False
 
 
 class UsuarioCrear(BaseModel):
@@ -123,3 +126,56 @@ class RecuperarConCodigoPeticion(BaseModel):
 class PasswordTemporalSalida(BaseModel):
     # Se muestra una sola vez a quien la genero, para dictarsela a la persona.
     password_temporal: str
+
+
+# --- Correo de recuperacion (V29) ------------------------------------------
+
+
+class EstadoCorreoSalida(BaseModel):
+    correo: str | None
+    verificado: bool
+    # Correo al que se envio un codigo que aun no se ha escrito.
+    pendiente: str | None
+    envio_configurado: bool
+
+
+class RegistrarCorreoPeticion(BaseModel):
+    correo: str = Field(min_length=5, max_length=254)
+    password_actual: str = Field(min_length=1, max_length=72)
+
+
+class VerificarCorreoPeticion(BaseModel):
+    codigo: str = Field(min_length=6, max_length=12)
+
+
+class QuitarCorreoPeticion(BaseModel):
+    password_actual: str = Field(min_length=1, max_length=72)
+
+
+class SolicitarCodigoCorreoPeticion(BaseModel):
+    nombre_usuario: str = Field(min_length=1, max_length=50)
+
+
+class RecuperarConCorreoPeticion(BaseModel):
+    nombre_usuario: str = Field(min_length=1, max_length=50)
+    codigo: str = Field(min_length=6, max_length=12)
+    password_nueva: PasswordNueva
+
+
+class OpcionesRecuperacionSalida(BaseModel):
+    correo: bool
+
+
+class EnvioCorreoSalida(BaseModel):
+    url_envio: str | None
+    configurado: bool
+    # Codigo de Google Apps Script con el secreto, para pegarlo en Google.
+    script: str
+
+
+class EnvioCorreoGuardar(BaseModel):
+    url_envio: str | None = Field(default=None, max_length=300)
+
+
+class PruebaCorreoPeticion(BaseModel):
+    para: str = Field(min_length=5, max_length=254)
