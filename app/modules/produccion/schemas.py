@@ -89,6 +89,8 @@ class OrdenSalida(BaseModel):
     supervisor: UsuarioRef
     turno: Referencia
     horno: Referencia
+    # "continuo" (una tanda por hora) o "batch" (un registro por orden) (V31).
+    horno_tipo: str = "continuo"
     producto: ProductoRef
     categoria: Referencia
     # Linea de la orden (la de su horno) y variedad de la materia prima (V21).

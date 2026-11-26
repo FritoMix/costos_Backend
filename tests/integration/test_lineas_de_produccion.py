@@ -471,3 +471,10 @@ def test_tipo_de_horno_no_cambia_con_orden_abierta(db, datos_base):
     sin_tipo = HornoGuardar(nombre=horno.nombre, linea_id=horno.linea_id)
     igual = catalogos.actualizar_horno(db, horno.id, sin_tipo)
     assert igual.tipo == "batch"
+
+
+def test_la_orden_informa_el_tipo_de_horno(db, datos_base):
+    from app.modules.produccion.schemas import OrdenSalida
+
+    _, orden, _ = _orden_batch(db, datos_base)
+    assert OrdenSalida.model_validate(orden).horno_tipo == "batch"

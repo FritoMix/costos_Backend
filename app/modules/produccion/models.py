@@ -151,6 +151,11 @@ class OrdenProduccion(Base):
     variedad: Mapped["Variedad | None"] = relationship(lazy="selectin")
 
     @property
+    def horno_tipo(self) -> str:
+        """Tipo del horno de la orden (V31): "continuo" o "batch"."""
+        return self.horno.tipo if self.horno is not None else "continuo"
+
+    @property
     def linea(self) -> "Linea":
         """La linea de la orden es la de su horno."""
         return self.horno.linea
