@@ -123,6 +123,8 @@ class HornoSalida(BaseModel):
     capacidad_bultos_hora: Decimal | None
     # Lineas sin Bodega (V28). Papa usa capacidad_bultos_hora.
     capacidad_kg_hora: Decimal | None = None
+    # "continuo" o "batch" (V31).
+    tipo: str = "continuo"
     categorias: list[CatalogoSalida]
     linea: LineaSalida | None = None
 
@@ -143,6 +145,8 @@ class HornoGuardar(BaseModel):
     )
     # Lineas sin Bodega (V28): kilos de materia prima por hora.
     capacidad_kg_hora: Decimal | None = Field(default=None, gt=0, le=Decimal("99999.99"))
+    # Tipo de horno (V31). Un cliente viejo que no lo envia lo conserva.
+    tipo: Literal["continuo", "batch"] = "continuo"
     categoria_ids: list[int] = Field(default_factory=list)
 
     @field_validator("capacidad_bultos_hora")

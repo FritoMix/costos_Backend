@@ -335,6 +335,8 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
         horno.capacidad_bultos_hora = datos.capacidad_bultos_hora
     if "capacidad_kg_hora" in datos.model_fields_set:
         horno.capacidad_kg_hora = datos.capacidad_kg_hora
+    if "tipo" in datos.model_fields_set or horno.id is None:
+        _aplicar_tipo_horno(db, horno, datos.tipo)
     _aplicar_linea_horno(db, horno, datos.linea_id)
     _ajustar_unidad_capacidad(db, horno)
 
@@ -345,6 +347,26 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
             raise ErrorDeValidacion("Una de las categorías seleccionadas no existe.")
         categorias.append(categoria)
     horno.categorias = categorias
+
+
+def _aplicar_tipo_horno(db: Session, horno: Horno, tipo: str) -> None:
+    """No se cambia el tipo con una orden abierta: sus registros quedarian a medias."""
+    if horno.id is not None and horno.tipo != tipo:
+        from app.modules.produccion.models import EstadoOrden, OrdenProduccion
+
+        abierta = _existe(
+            db,
+            select(OrdenProduccion.id).where(
+                OrdenProduccion.horno_id == horno.id,
+                OrdenProduccion.eliminado == False,  # noqa: E712
+                OrdenProduccion.estado.in_([EstadoOrden.PENDIENTE, EstadoOrden.EN_PRODUCCION]),
+            ),
+        )
+        if abierta:
+            raise ErrorDeValidacion(
+                f'"{horno.nombre}" tiene una orden abierta: ciérrala antes de cambiarle el tipo.'
+            )
+    horno.tipo = tipo
 
 
 def _ajustar_unidad_capacidad(db: Session, horno: Horno) -> None:

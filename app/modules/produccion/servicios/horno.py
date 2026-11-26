@@ -20,7 +20,7 @@ Si falta la calibracion del tanque o la densidad, esas columnas quedan
 vacias: el registro se guarda igual y no se inventa ningun valor.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
@@ -29,6 +29,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.core.tiempo import ahora_local
 from app.db.auditoria import registrar, snapshot
 from app.db.transacciones import atomica
 from app.modules.bodega.service import obtener as obtener_referencia_papa
@@ -60,6 +61,7 @@ from app.modules.produccion.servicios.tandas import (
     exigir_hora_empezada,
     franja_de_tanda,
     horario_del_registro,
+    tandas_ocupadas,
 )
 from app.modules.produccion.servicios.totales import producido_por_referencia
 
@@ -273,6 +275,15 @@ def _validar_capacidad_tanda(orden: OrdenProduccion, total_bultos: Decimal) -> N
     capacidad = orden.horno.capacidad_bultos_hora
     if capacidad is None:
         return
+    if orden.horno.es_batch:
+        # Un horno batch registra la orden completa: su tope son todas las horas.
+        horas = orden.horas_produccion or 1
+        if total_bultos > capacidad * horas:
+            raise ErrorDeValidacion(
+                f"La orden carga {total_bultos} bultos y el {orden.horno.nombre} admite máximo "
+                f"{capacidad * horas} en {horas} h. Revisa los bultos antes de guardar."
+            )
+        return
     if total_bultos > capacidad:
         raise ErrorDeValidacion(
             f"La tanda carga {total_bultos} bultos y el {orden.horno.nombre} admite "
@@ -309,21 +320,33 @@ def _aplicar_datos(
             raise ErrorDeValidacion(
                 f"Indica cuántos kilos de {linea.nombre_materia_prima} entraron en la hora."
             )
+        if not orden.horno.es_batch and datos.kg_materia_prima > KG_MAXIMOS_POR_HORA:
+            raise ErrorDeValidacion(
+                f"En una hora no entran más de {KG_MAXIMOS_POR_HORA:,} kg: revisa la cantidad."
+            )
         filas = []
         total_bultos = Decimal("0")
         kg_crudos = datos.kg_materia_prima.quantize(CENTAVOS, rounding=ROUND_HALF_UP)
 
-    _validar_niveles_aceite(
-        datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm, datos.aceite_agregado_litros
-    )
-    diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
-    litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
-        db, orden.horno, orden.fecha, diferencia, datos.aceite_agregado_litros
-    )
+    if orden.horno.es_batch:
+        diferencia, (litros_por_cm, volumen, densidad, kg_aceite) = None, _aceite_por_litros(db, orden, datos)
+    else:
+        if datos.nivel_aceite_inicial_cm is None or datos.nivel_aceite_final_cm is None:
+            raise ErrorDeValidacion("Indica el nivel del aceite al inicio y al final de la tanda.")
+        if datos.temperatura_aceite_c is None:
+            raise ErrorDeValidacion("Indica la temperatura del aceite.")
+        _validar_niveles_aceite(
+            datos.nivel_aceite_inicial_cm, datos.nivel_aceite_final_cm, datos.aceite_agregado_litros
+        )
+        diferencia = datos.nivel_aceite_inicial_cm - datos.nivel_aceite_final_cm
+        litros_por_cm, volumen, densidad, kg_aceite = calcular_aceite(
+            db, orden.horno, orden.fecha, diferencia, datos.aceite_agregado_litros
+        )
     # La hora la pone la app segun el numero de tanda (V17); solo las ordenes
     # antiguas sin hora de inicio usan la que se digito.
     inicio, fin = horario_del_registro(orden, franja, datos)
-    validar_duracion_tanda(inicio=inicio, fin=fin)
+    if not orden.horno.es_batch:
+        validar_duracion_tanda(inicio=inicio, fin=fin)
     validar_ventana_registro(
         horas_produccion=orden.horas_produccion,
         inicio=inicio,
@@ -360,8 +383,10 @@ def _aplicar_datos(
         registro.kg_fritos_estimados = None
     registro.operarios_seleccion = datos.operarios_seleccion
     registro.operarios_horno = datos.operarios_horno
-    registro.nivel_aceite_inicial_cm = datos.nivel_aceite_inicial_cm
-    registro.nivel_aceite_final_cm = datos.nivel_aceite_final_cm
+    batch = orden.horno.es_batch
+    registro.cantidad_baches = datos.cantidad_baches if batch else None
+    registro.nivel_aceite_inicial_cm = None if batch else datos.nivel_aceite_inicial_cm
+    registro.nivel_aceite_final_cm = None if batch else datos.nivel_aceite_final_cm
     registro.aceite_agregado_litros = datos.aceite_agregado_litros
     registro.aceite_id = orden.horno.aceite_id
     registro.diferencia_aceite_cm = diferencia
@@ -393,6 +418,43 @@ def _aplicar_datos(
         )
 
 
+KG_MAXIMOS_POR_HORA = Decimal("20000")
+
+
+def _aceite_por_litros(
+    db: Session, orden: OrdenProduccion, datos: RegistroHornoGuardar
+) -> tuple[None, Decimal, Decimal | None, Decimal | None]:
+    """
+    Horno batch (V31): no hay nivel de tanque. El aceite consumido son los
+    litros que se agregaron (pistola dosificadora o canecas) y se pasa a kg
+    con la densidad vigente del horno.
+    """
+    if datos.cantidad_baches is None:
+        raise ErrorDeValidacion("Indica cuántos baches se hicieron en la orden.")
+    volumen = datos.aceite_agregado_litros.quantize(CENTAVOS, rounding=ROUND_HALF_UP)
+    densidad = obtener_densidad_vigente(db, orden.horno.id, orden.fecha)
+    kg = None if densidad is None else (volumen * densidad).quantize(CENTAVOS, rounding=ROUND_HALF_UP)
+    return None, volumen, densidad, kg
+
+
+def franja_de_orden(orden: OrdenProduccion) -> tuple[datetime, datetime] | None:
+    """Horno batch: su unico registro cubre todas las horas de la orden."""
+    if orden.hora_inicio is None:
+        return None
+    return orden.hora_inicio, orden.hora_inicio + timedelta(hours=orden.horas_produccion or 1)
+
+
+def _numero_registro_batch(db: Session, orden: OrdenProduccion) -> int:
+    if tandas_ocupadas(db, orden.id, RegistroHorno):
+        raise ErrorDeValidacion(
+            f"La orden {orden.numero_orden} ya tiene su registro de horno: corrígelo en lugar de "
+            "registrar otro. En un horno batch se registra una sola vez por orden."
+        )
+    if orden.hora_inicio is not None and ahora_local() < orden.hora_inicio:
+        raise ErrorDeValidacion("La orden todavía no ha empezado.")
+    return 1
+
+
 @atomica
 def crear_registro(
     db: Session, orden: OrdenProduccion, datos: RegistroHornoGuardar, usuario: Usuario
@@ -404,9 +466,13 @@ def crear_registro(
         )
 
     verificar_linea(usuario, orden)
-    numero = elegir_numero_tanda(db, orden, datos.numero_tanda, RegistroHorno)
-    franja = franja_de_tanda(orden, numero)
-    exigir_hora_empezada(franja, "tanda", numero)
+    if orden.horno.es_batch:
+        numero = _numero_registro_batch(db, orden)
+        franja = franja_de_orden(orden)
+    else:
+        numero = elegir_numero_tanda(db, orden, datos.numero_tanda, RegistroHorno)
+        franja = franja_de_tanda(orden, numero)
+        exigir_hora_empezada(franja, "tanda", numero)
 
     registro = RegistroHorno(orden_id=orden.id, usuario_id=usuario.id, numero_tanda=numero)
     registro.orden = orden
@@ -442,7 +508,10 @@ def editar_registro(
         )
     _verificar_autoria(registro, usuario)
     # Al corregir, la tanda conserva su hora: no se cambia de numero.
-    franja = franja_de_tanda(registro.orden, registro.numero_tanda)
+    if registro.orden.horno.es_batch:
+        franja = franja_de_orden(registro.orden)
+    else:
+        franja = franja_de_tanda(registro.orden, registro.numero_tanda)
     _aplicar_datos(db, registro, registro.orden, datos, franja)
     db.flush()
     db.refresh(registro)

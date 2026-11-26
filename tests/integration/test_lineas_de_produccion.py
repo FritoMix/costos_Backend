@@ -395,3 +395,86 @@ def test_capacidad_vieja_en_bultos_de_otra_linea_no_entra_a_la_mezcla(db, datos_
 def test_capacidad_kg_invalida_se_rechaza(valor):
     with pytest.raises(ValueError):
         HornoGuardar(nombre="X", capacidad_kg_hora=Decimal(valor))
+
+
+def _orden_batch(db, datos_base, codigo="nachos", horas=3):
+    _, horno, categoria, producto, op_horno, _ = _montar_linea(db, datos_base, codigo, f"Batch {codigo}")
+    horno.tipo = "batch"
+    db.flush()
+    orden = servicio_ordenes.crear_orden(
+        db, _orden(datos_base, horno, categoria, producto, horas_produccion=horas), datos_base.supervisor
+    )
+    orden = servicio_ordenes.iniciar_orden(db, orden)
+    orden.hora_inicio -= timedelta(minutes=30)
+    db.flush()
+    return horno, orden, op_horno
+
+
+def test_horno_batch_un_registro_por_orden_con_aceite_por_litros(db, datos_base):
+    """V31: el horno batch registra la orden completa, sin nivel de aceite."""
+    horno, orden, op_horno = _orden_batch(db, datos_base)
+    datos = RegistroHornoGuardar(
+        kg_materia_prima=Decimal("1500"),
+        cantidad_baches=12,
+        operarios_seleccion=2,
+        operarios_horno=1,
+        aceite_agregado_litros=Decimal("40"),
+    )
+    registro = servicio_horno.crear_registro(db, orden, datos, op_horno)
+    assert registro.cantidad_baches == 12
+    assert registro.nivel_aceite_inicial_cm is None and registro.diferencia_aceite_cm is None
+    assert registro.volumen_aceite_litros == Decimal("40.00")
+    # Cubre todas las horas de la orden, aunque no hayan terminado.
+    assert registro.hora_fin - registro.hora_inicio == timedelta(hours=3)
+    # Una sola vez por orden: lo demás se corrige.
+    with pytest.raises(ErrorDeValidacion, match="ya tiene su registro"):
+        servicio_horno.crear_registro(db, orden, datos, op_horno)
+    corregido = servicio_horno.editar_registro(
+        db, registro, datos.model_copy(update={"cantidad_baches": 14}), op_horno
+    )
+    assert corregido.cantidad_baches == 14
+
+
+def test_horno_batch_exige_baches_y_el_continuo_exige_niveles(db, datos_base):
+    _, orden, op_horno = _orden_batch(db, datos_base, "nachos")
+    sin_baches = RegistroHornoGuardar(
+        kg_materia_prima=Decimal("300"), operarios_seleccion=1, operarios_horno=1
+    )
+    with pytest.raises(ErrorDeValidacion, match="cuántos baches"):
+        servicio_horno.crear_registro(db, orden, sin_baches, op_horno)
+
+    _, horno, categoria, producto, op_continuo, _ = _montar_linea(db, datos_base, "platano", "Continuo P")
+    harton = db.scalar(select(Variedad).where(Variedad.nombre == "Hartón"))
+    continua = servicio_ordenes.crear_orden(
+        db, _orden(datos_base, horno, categoria, producto, variedad_id=harton.id), datos_base.supervisor
+    )
+    continua = servicio_ordenes.iniciar_orden(db, continua)
+    with pytest.raises(ErrorDeValidacion, match="nivel del aceite"):
+        servicio_horno.crear_registro(
+            db,
+            continua,
+            RegistroHornoGuardar(kg_materia_prima=Decimal("300"), operarios_seleccion=1, operarios_horno=1),
+            op_continuo,
+        )
+    # En un continuo siguen valiendo 20.000 kg por hora como tope.
+    with pytest.raises(ErrorDeValidacion, match="20,000"):
+        servicio_horno.crear_registro(db, continua, _tanda(kg_materia_prima=Decimal("25000")), op_continuo)
+
+
+def test_tipo_de_horno_no_cambia_con_orden_abierta(db, datos_base):
+    horno, orden, _ = _orden_batch(db, datos_base)
+    with pytest.raises(ErrorDeValidacion, match="cambiarle el tipo"):
+        catalogos.actualizar_horno(
+            db, horno.id, HornoGuardar(nombre=horno.nombre, linea_id=horno.linea_id, tipo="continuo")
+        )
+    # Un cliente viejo que no envía el tipo lo conserva.
+    sin_tipo = HornoGuardar(nombre=horno.nombre, linea_id=horno.linea_id)
+    igual = catalogos.actualizar_horno(db, horno.id, sin_tipo)
+    assert igual.tipo == "batch"
+
+
+def test_la_orden_informa_el_tipo_de_horno(db, datos_base):
+    from app.modules.produccion.schemas import OrdenSalida
+
+    _, orden, _ = _orden_batch(db, datos_base)
+    assert OrdenSalida.model_validate(orden).horno_tipo == "batch"
