@@ -27,5 +27,6 @@
   "V26__codigo_recuperacion_admin.sql": "c4c5212dcd6d831ad5effcafaebeffc8a2511d9a65fa91b18d9b26888efe006f",
   "V27__revocar_codigo_compartido_v26.sql": "111e53efad4dcace6e12b37c6d1533afa2cad8a25c118c311778b5030cf42cf4",
   "V28__capacidad_horno_kg.sql": "a3ec6613ea0b45e632e093083e8d4fb178f312a8711f66073f7408a24a19f9d9",
-  "V29__correo_de_recuperacion.sql": "05b7dc366ad668592ee623b47b0bd7f1f3c3c1112bf5d5805dc6918c0655751d"
+  "V29__correo_de_recuperacion.sql": "05b7dc366ad668592ee623b47b0bd7f1f3c3c1112bf5d5805dc6918c0655751d",
+  "V30__acceso_admin_y_correo.sql": "76f84ef3997921e2b728f339763c9488e7ea3fe0a91845ae64e133df90a720d9"
 }
