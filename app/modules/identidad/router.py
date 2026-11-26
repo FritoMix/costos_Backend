@@ -103,8 +103,8 @@ def olvide_password(datos: SolicitudRecuperacion, db: BD) -> dict:
     La respuesta es siempre la misma, exista o no el usuario."""
     service.solicitar_recuperacion(db, datos.nombre_usuario)
     return {
-        "mensaje": "Listo. Le avisamos al administrador y al supervisor: ellos te darán una "
-        "contraseña temporal."
+        "mensaje": "Solicitud recibida. Si tu cuenta está habilitada, un responsable de planta "
+        "puede darte una contraseña temporal."
     }
 
 

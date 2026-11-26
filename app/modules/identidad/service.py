@@ -213,7 +213,9 @@ def solicitar_recuperacion(db: Session, nombre_usuario: str) -> None:
     from app.modules.notificaciones.service import _crear_para, _destinatarios_por_rol
 
     usuario = db.scalar(
-        select(Usuario).where(func.lower(Usuario.nombre_usuario) == nombre_usuario.strip().lower())
+        select(Usuario)
+        .where(func.lower(Usuario.nombre_usuario) == nombre_usuario.strip().lower())
+        .with_for_update(of=Usuario)
     )
     if usuario is None or not usuario.puede_entrar:
         return
@@ -222,7 +224,7 @@ def solicitar_recuperacion(db: Session, nombre_usuario: str) -> None:
         select(Notificacion.id)
         .where(
             Notificacion.tipo == TipoNotificacion.RECUPERAR_PASSWORD,
-            Notificacion.mensaje.contains(f"({usuario.nombre_usuario})"),
+            Notificacion.mensaje.contains(f"({usuario.nombre_usuario})", autoescape=True),
             Notificacion.fecha_creacion >= hace_poco,
         )
         .limit(1)
@@ -239,10 +241,10 @@ def solicitar_recuperacion(db: Session, nombre_usuario: str) -> None:
         db,
         usuarios=destinatarios,
         tipo=TipoNotificacion.RECUPERAR_PASSWORD,
-        titulo=f"{usuario.nombre_completo} olvidó su contraseña",
+        titulo=f"Contraseña temporal para {usuario.nombre_usuario}",
         mensaje=(
             f"{usuario.nombre_completo} ({usuario.nombre_usuario}), {usuario.rol.nombre}, pidió una "
-            "contraseña nueva. Entra a Usuarios, búscalo y toca «Dar contraseña temporal»."
+            "contraseña temporal. Abre este aviso para gestionar la solicitud."
         ),
         orden_id=None,
     )

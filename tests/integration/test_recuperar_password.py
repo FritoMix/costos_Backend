@@ -33,6 +33,25 @@ def test_solicitud_avisa_a_admin_y_supervisor_una_vez(db, datos_base):
     assert _avisos(db) == 2  # una sola cada 15 minutos
 
 
+def test_la_solicitud_admite_nombre_largo_y_distingue_usuarios_con_guion_bajo(db, datos_base):
+    primero = datos_base.operario_horno
+    segundo = datos_base.operario_saborizado
+    primero.nombre_usuario = "turnoxuno"
+    segundo.nombre_usuario = "turno_uno"
+    segundo.nombre_completo = "A" * 150
+    db.flush()
+    service.solicitar_recuperacion(db, primero.nombre_usuario)
+    service.solicitar_recuperacion(db, segundo.nombre_usuario)
+    avisos = db.scalars(select(Notificacion).where(
+        Notificacion.tipo == TipoNotificacion.RECUPERAR_PASSWORD
+    )).all()
+    for solicitante in (primero, segundo):
+        destinatarios = [
+            aviso.usuario_id for aviso in avisos if f"({solicitante.nombre_usuario})" in aviso.mensaje
+        ]
+        assert sorted(destinatarios) == sorted([datos_base.admin.id, datos_base.supervisor.id])
+
+
 def test_password_temporal_obliga_a_cambiarla(db, datos_base):
     operario = datos_base.operario_horno
     temporal = service.dar_password_temporal(db, operario, datos_base.supervisor)
