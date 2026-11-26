@@ -111,3 +111,61 @@ def test_v27_revoca_solo_el_codigo_de_v26_aunque_cambie_el_nombre(motor_vacio, t
     with motor_vacio.connect() as c:
         disponibles = c.scalars(text("SELECT id FROM codigos_recuperacion WHERE usado_en IS NULL")).all()
         assert disponibles == [personal]
+
+
+@pytest.mark.parametrize("estado_codigo", ["disponible", "usado", "reemplazado"])
+def test_v32_revoca_la_credencial_de_v30_y_preserva_el_acceso_personal(
+    motor_vacio, tmp_path, estado_codigo
+):
+    for archivo in ORIGEN.glob("V*.sql"):
+        if int(archivo.name.split("__")[0][1:]) <= 29:
+            shutil.copy2(archivo, tmp_path)
+    manifiesto(tmp_path)
+    aplicar_migraciones_pendientes(motor_vacio, tmp_path)
+
+    with motor_vacio.begin() as c:
+        usuario_id = c.scalar(text(
+            "INSERT INTO usuarios (nombre_completo, nombre_usuario, password_hash, rol_id) "
+            "SELECT 'Responsable de prueba', 'admin', 'hash-personal', id FROM roles WHERE codigo='admin' "
+            "RETURNING id"
+        ))
+
+    for version in (30, 31):
+        shutil.copy2(next(ORIGEN.glob(f"V{version}__*.sql")), tmp_path)
+    manifiesto(tmp_path)
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 2
+
+    with motor_vacio.begin() as c:
+        original = c.execute(text("SELECT id, identificador FROM codigos_recuperacion")).one()
+        personal = c.scalar(text(
+            "INSERT INTO codigos_recuperacion (usuario_id, identificador, codigo_hash) "
+            "VALUES (:usuario, :prefijo, 'otro-hash') RETURNING id"
+        ), {"usuario": usuario_id, "prefijo": original.identificador})
+        usado_en = None
+        if estado_codigo == "usado":
+            usado_en = c.scalar(text(
+                "UPDATE codigos_recuperacion SET usado_en=now() WHERE id=:id RETURNING usado_en"
+            ), {"id": original.id})
+        elif estado_codigo == "reemplazado":
+            c.execute(text("DELETE FROM codigos_recuperacion WHERE id=:id"), {"id": original.id})
+        c.execute(text(
+            "UPDATE usuarios SET nombre_usuario='admin_renombrado', correo='titular@example.test', "
+            "correo_verificado_en=now() WHERE id=:id"
+        ), {"id": usuario_id})
+        cuenta = text(
+            "SELECT password_hash, token_version, correo, correo_verificado_en FROM usuarios WHERE id=:id"
+        )
+        antes = c.execute(cuenta, {"id": usuario_id}).one()
+
+    shutil.copy2(next(ORIGEN.glob("V32__*.sql")), tmp_path)
+    manifiesto(tmp_path)
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 1
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 0
+
+    with motor_vacio.connect() as c:
+        filas = dict(c.execute(text("SELECT id, usado_en FROM codigos_recuperacion")).all())
+        esperadas = {personal: None}
+        if estado_codigo == "usado":
+            esperadas[original.id] = usado_en
+        assert filas == esperadas
+        assert c.execute(cuenta, {"id": usuario_id}).one() == antes

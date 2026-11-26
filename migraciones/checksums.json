@@ -29,5 +29,6 @@
   "V28__capacidad_horno_kg.sql": "a3ec6613ea0b45e632e093083e8d4fb178f312a8711f66073f7408a24a19f9d9",
   "V29__correo_de_recuperacion.sql": "05b7dc366ad668592ee623b47b0bd7f1f3c3c1112bf5d5805dc6918c0655751d",
   "V30__acceso_admin_y_correo.sql": "76f84ef3997921e2b728f339763c9488e7ea3fe0a91845ae64e133df90a720d9",
-  "V31__hornos_batch.sql": "7ccf27e5414fa3194941177119cc5ca2591e35d8827b13bc7d1edf1b20ea2029"
+  "V31__hornos_batch.sql": "7ccf27e5414fa3194941177119cc5ca2591e35d8827b13bc7d1edf1b20ea2029",
+  "V32__revocar_codigo_compartido_v30.sql": "4aff28654a2a7edffbd33a984148217c06d1fa798dd8c80c8c46a0ba5a7b5fa0"
 }
