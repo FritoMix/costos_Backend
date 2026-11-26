@@ -77,3 +77,15 @@ Si el administrador olvida su contraseña ya no hace falta entrar a Render:
 Los códigos se guardan con bcrypt; tras 5 intentos fallidos la recuperación se
 bloquea por tiempo creciente. Generar códigos nuevos anula los anteriores.
 `ADMIN_RESET_PASSWORD` sigue disponible como último recurso desde Render.
+
+### Actualización a V27
+
+Antes del despliegue, el responsable de planta debe comprobar que puede iniciar sesión con su propia
+contraseña o que dispone del procedimiento de recuperación desde Render. V27 retira el código
+compartido instalado por V26 si aún estaba disponible. Los lotes personales siguen vigentes.
+Después de desplegar, verificar en el registro del migrador la versión 27 y consultar **Mi cuenta**
+con la cuenta administrativa. Si necesita un lote personal, generarlo y guardarlo en privado.
+
+Cada emisión reemplaza el lote completo, incluso desde dos sesiones simultáneas. Cambiar de rol
+invalida los códigos de esa cuenta. Si se necesita revertir la aplicación, conservar V27 y su
+checksum en la versión de corrección para que el migrador reconozca el esquema.

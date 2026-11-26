@@ -24,5 +24,6 @@
   "V23__sabores_por_categoria.sql": "dd2d7378ba45f53181939909e2e30a3f65b52b270661f94834647ecdb25bc15d",
   "V24__sabores_trocillo_y_nachos.sql": "2a371f176f71ff8a607d8981682e735e415ba70eb2023dd6976c146f08f65f3a",
   "V25__codigos_de_recuperacion.sql": "4ebaaf21603fef5cd890d59fcf842f39d8fb0f7ab5438f0981210cbd76a7f892",
-  "V26__codigo_recuperacion_admin.sql": "c4c5212dcd6d831ad5effcafaebeffc8a2511d9a65fa91b18d9b26888efe006f"
+  "V26__codigo_recuperacion_admin.sql": "c4c5212dcd6d831ad5effcafaebeffc8a2511d9a65fa91b18d9b26888efe006f",
+  "V27__revocar_codigo_compartido_v26.sql": "111e53efad4dcace6e12b37c6d1533afa2cad8a25c118c311778b5030cf42cf4"
 }
