@@ -333,10 +333,12 @@ class RegistroHornoSalida(BaseModel):
     kg_fritos_estimados: Decimal | None
     operarios_seleccion: int
     operarios_horno: int
-    nivel_aceite_inicial_cm: Decimal
-    nivel_aceite_final_cm: Decimal
+    # Hornos batch (V31): sin nivel de aceite y con el total de baches.
+    nivel_aceite_inicial_cm: Decimal | None
+    nivel_aceite_final_cm: Decimal | None
     aceite_agregado_litros: Decimal = Decimal("0")
-    diferencia_aceite_cm: Decimal
+    diferencia_aceite_cm: Decimal | None
+    cantidad_baches: int | None = None
     temperatura_aceite_c: Decimal | None
     litros_por_cm_usado: Decimal | None
     volumen_aceite_litros: Decimal | None
@@ -372,16 +374,21 @@ class RegistroHornoGuardar(BaseModel):
     referencia_papa_id: int | None = Field(default=None, gt=0)
     cantidad_bultos: Decimal | None = Field(default=None, gt=0, max_digits=6, decimal_places=2)
     # Lineas que no son papa (V21): kilos de materia prima que entraron.
-    kg_materia_prima: Decimal | None = Field(default=None, gt=0, le=20000, max_digits=8, decimal_places=2)
+    # Hasta 20.000 kg por hora en hornos continuos; un horno batch registra la orden completa.
+    kg_materia_prima: Decimal | None = Field(default=None, gt=0, le=200000, max_digits=9, decimal_places=2)
     operarios_seleccion: int = Field(ge=0, le=999)
     operarios_horno: int = Field(ge=0, le=999)
-    nivel_aceite_inicial_cm: Decimal = Field(ge=0, max_digits=6, decimal_places=2)
-    nivel_aceite_final_cm: Decimal = Field(ge=0, max_digits=6, decimal_places=2)
+    # Obligatorios en hornos continuos; un horno batch no los usa (V31).
+    nivel_aceite_inicial_cm: Decimal | None = Field(default=None, ge=0, max_digits=6, decimal_places=2)
+    nivel_aceite_final_cm: Decimal | None = Field(default=None, ge=0, max_digits=6, decimal_places=2)
+    # Horno batch (V31): cuantos baches se hicieron en la orden.
+    cantidad_baches: int | None = Field(default=None, ge=1, le=999)
     # Litros que se agregaron al tanque durante la tanda (V18).
     aceite_agregado_litros: Decimal = Field(
         default=Decimal("0"), ge=0, le=99999, max_digits=7, decimal_places=2
     )
-    temperatura_aceite_c: Decimal = Field(gt=0, le=400, max_digits=5, decimal_places=2)
+    # Obligatoria en hornos continuos; opcional en batch y horneado (V31).
+    temperatura_aceite_c: Decimal | None = Field(default=None, gt=0, le=400, max_digits=5, decimal_places=2)
     observaciones: str | None = None
     # Desperdicio de la tanda (opcional).
     tipo_desperdicio_id: int | None = None
@@ -395,6 +402,8 @@ class RegistroHornoGuardar(BaseModel):
         Si se agrego aceite en la tanda, el nivel final puede quedar mas alto:
         el servicio revisa entonces que el consumo total no sea negativo.
         """
+        if self.nivel_aceite_inicial_cm is None or self.nivel_aceite_final_cm is None:
+            return self
         if self.nivel_aceite_final_cm > self.nivel_aceite_inicial_cm and self.aceite_agregado_litros <= 0:
             raise ValueError(
                 "El nivel final del aceite no puede ser mayor que el inicial. "

@@ -155,6 +155,10 @@ class TipoAceite(Base):
         return f"<TipoAceite {self.nombre}>"
 
 
+TIPO_CONTINUO = "continuo"
+TIPO_BATCH = "batch"
+
+
 class Horno(Base):
     __tablename__ = "hornos"
 
@@ -189,6 +193,15 @@ class Horno(Base):
     # pellet, trocillo, harinas, extruido). La papa sigue en bultos por hora
     # porque la formula de Bodega reparte la mezcla en bultos.
     capacidad_kg_hora: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+
+    # Tipo de horno (V31): "continuo" (una tanda por hora, aceite por nivel
+    # del tanque) o "batch" (un registro por orden con el total de baches y
+    # el aceite por litros agregados; tambien los hornos de extruido).
+    tipo: Mapped[str] = mapped_column(String(10), default="continuo", server_default="continuo")
+
+    @property
+    def es_batch(self) -> bool:
+        return self.tipo == TIPO_BATCH
 
     # Si el horno esta habilitado para ordenes de exportacion. Cuando una
     # orden es de exportacion, el horno elegido debe tener esto en True,

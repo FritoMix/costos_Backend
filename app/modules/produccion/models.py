@@ -517,9 +517,12 @@ class RegistroHorno(Base):
     operarios_seleccion: Mapped[int] = mapped_column(SmallInteger)
     operarios_horno: Mapped[int] = mapped_column(SmallInteger)
 
-    nivel_aceite_inicial_cm: Mapped[Decimal] = mapped_column(Numeric(6, 2))
-    nivel_aceite_final_cm: Mapped[Decimal] = mapped_column(Numeric(6, 2))
-    diferencia_aceite_cm: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    # Hornos continuos: nivel del tanque en cm. Los batch no lo usan (V31).
+    nivel_aceite_inicial_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    nivel_aceite_final_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    diferencia_aceite_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    # Horno batch (V31): cuantos baches se hicieron en la orden.
+    cantidad_baches: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     temperatura_aceite_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
 
     # Conversion cm -> litros -> kg. Quedan en None si el horno todavia no
