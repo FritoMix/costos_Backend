@@ -22,12 +22,13 @@ from datetime import timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
 from app.core.errores import CredencialesInvalidas, ErrorDeValidacion
 from app.core.seguridad import hash_password, verificar_password
 from app.modules.identidad.models import CodigoRecuperacion, IntentoLogin, RolCodigo, Usuario
+from app.modules.identidad.service import obtener_usuario
 from app.modules.identidad.sesiones import (
     _HASH_FICTICIO,
     AccesoTemporalmenteLimitado,
@@ -68,13 +69,18 @@ def estado(db: Session, usuario: Usuario) -> dict:
 
 def generar(db: Session, usuario: Usuario, password_actual: str) -> list[str]:
     """Reemplaza los codigos anteriores por 8 nuevos y los devuelve UNA vez."""
-    if not puede_usar_codigos(usuario):
+    usuario = obtener_usuario(db, usuario.id, bloquear=True)
+    if not usuario.puede_entrar or not puede_usar_codigos(usuario):
         raise ErrorDeValidacion("Solo el administrador usa códigos de recuperación.")
     if not verificar_password(password_actual, usuario.password_hash):
         raise ErrorDeValidacion("La contraseña actual no es correcta.")
     db.execute(delete(CodigoRecuperacion).where(CodigoRecuperacion.usuario_id == usuario.id))
-    codigos = [_nuevo_codigo() for _ in range(CANTIDAD)]
-    for codigo in codigos:
+    # El prefijo identifica un único código dentro del lote.
+    por_prefijo: dict[str, str] = {}
+    while len(por_prefijo) < CANTIDAD:
+        codigo = _nuevo_codigo()
+        por_prefijo.setdefault(codigo[:4], codigo)
+    for codigo in por_prefijo.values():
         db.add(
             CodigoRecuperacion(
                 usuario_id=usuario.id,
@@ -84,7 +90,7 @@ def generar(db: Session, usuario: Usuario, password_actual: str) -> list[str]:
         )
     db.commit()
     logger.warning("auth.codigos_generados usuario_id=%d", usuario.id)
-    return [f"{c[:4]}-{c[4:8]}-{c[8:]}" for c in codigos]
+    return [f"{c[:4]}-{c[4:8]}-{c[8:]}" for c in por_prefijo.values()]
 
 
 def _filas_de_intento(db: Session, nombre: str, ip: str) -> tuple[list[IntentoLogin], dict, str]:
@@ -122,9 +128,15 @@ def recuperar(db: Session, nombre_usuario: str, codigo: str, password_nueva: str
     momento = ahora()
     limpio = _normalizar(codigo)
 
-    usuario = db.scalar(select(Usuario).where(Usuario.nombre_usuario == nombre))
+    usuario = db.scalar(
+        select(Usuario)
+        .where(Usuario.nombre_usuario == nombre)
+        .options(selectinload(Usuario.rol))
+        .with_for_update(of=Usuario)
+        .execution_options(populate_existing=True)
+    )
     candidato = None
-    if usuario is not None and usuario.puede_entrar and len(limpio) == 12:
+    if usuario is not None and usuario.puede_entrar and puede_usar_codigos(usuario) and len(limpio) == 12:
         candidato = db.scalar(
             select(CodigoRecuperacion)
             .where(

@@ -6,8 +6,8 @@ app/core/errores.py. Eso permite probarla sin levantar el servidor y
 reutilizarla desde otros modulos.
 """
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.borrado_suave import marcar_eliminado_por
 from app.core.errores import (
@@ -17,15 +17,21 @@ from app.core.errores import (
     RecursoNoEncontrado,
 )
 from app.core.seguridad import hash_password, verificar_password
-from app.modules.identidad.models import Rol, RolCodigo, Usuario
+from app.modules.identidad.models import CodigoRecuperacion, Rol, RolCodigo, Usuario
 from app.modules.identidad.schemas import UsuarioActualizar, UsuarioCrear
 from app.modules.identidad.sesiones import revocar_sesiones_usuario
 
 # --- Consultas basicas -----------------------------------------------------
 
 
-def obtener_usuario(db: Session, usuario_id: int) -> Usuario:
-    usuario = db.get(Usuario, usuario_id)
+def obtener_usuario(db: Session, usuario_id: int, *, bloquear: bool = False) -> Usuario:
+    usuario = db.get(
+        Usuario,
+        usuario_id,
+        populate_existing=bloquear,
+        with_for_update={"of": Usuario} if bloquear else None,
+        options=[selectinload(Usuario.rol)] if bloquear else None,
+    )
     if usuario is None or usuario.eliminado:
         raise RecursoNoEncontrado("Ese usuario no existe.")
     return usuario
@@ -152,13 +158,15 @@ def crear_usuario(db: Session, datos: UsuarioCrear) -> Usuario:
 
 
 def actualizar_usuario(db: Session, usuario_id: int, datos: UsuarioActualizar) -> Usuario:
-    usuario = obtener_usuario(db, usuario_id)
+    usuario = obtener_usuario(db, usuario_id, bloquear=True)
     _validar_nombre_libre(db, datos.nombre_usuario, excepto_id=usuario.id)
     rol = _validar_rol(db, datos.rol_id)
     linea_id = _linea_del_usuario(db, rol, datos.linea_id, usuario.linea_id)
 
     usuario.nombre_completo = datos.nombre_completo.strip()
     usuario.nombre_usuario = datos.nombre_usuario.strip().lower()
+    if usuario.rol_id != rol.id:
+        db.execute(delete(CodigoRecuperacion).where(CodigoRecuperacion.usuario_id == usuario.id))
     usuario.rol_id = datos.rol_id
     usuario.linea_id = linea_id
 

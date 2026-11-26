@@ -78,3 +78,36 @@ def test_migracion_fallida_no_deja_tabla_ni_historial_parcial(motor_vacio, tmp_p
         assert c.scalar(text("SELECT to_regclass('conservada')")) is not None
         assert c.scalar(text("SELECT to_regclass('parcial')")) is None
         assert c.scalar(text("SELECT count(*) FROM esquema_migraciones")) == 1
+
+
+def test_v27_revoca_solo_el_codigo_de_v26_aunque_cambie_el_nombre(motor_vacio, tmp_path):
+    for archivo in ORIGEN.glob("V*.sql"):
+        if int(archivo.name.split("__")[0][1:]) <= 25:
+            shutil.copy2(archivo, tmp_path / archivo.name)
+    manifiesto(tmp_path)
+    aplicar_migraciones_pendientes(motor_vacio, tmp_path)
+    with motor_vacio.begin() as c:
+        c.execute(text(
+            "INSERT INTO usuarios (nombre_completo, nombre_usuario, password_hash, rol_id) "
+            "SELECT 'Administrador de prueba', 'admin', 'ficticio', id FROM roles WHERE codigo='admin'"
+        ))
+
+    shutil.copy2(next(ORIGEN.glob("V26__*")), tmp_path)
+    manifiesto(tmp_path)
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 1
+    with motor_vacio.begin() as c:
+        original = c.execute(text("SELECT id, usuario_id, identificador FROM codigos_recuperacion")).one()
+        c.execute(text("UPDATE usuarios SET nombre_usuario='admin_renombrado' WHERE id=:id"),
+                  {"id": original.usuario_id})
+        personal = c.scalar(text(
+            "INSERT INTO codigos_recuperacion (usuario_id, identificador, codigo_hash) "
+            "VALUES (:usuario, :prefijo, 'hash-personal-de-prueba') RETURNING id"
+        ), {"usuario": original.usuario_id, "prefijo": original.identificador})
+
+    shutil.copy2(next(ORIGEN.glob("V27__*")), tmp_path)
+    manifiesto(tmp_path)
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 1
+    assert aplicar_migraciones_pendientes(motor_vacio, tmp_path) == 0
+    with motor_vacio.connect() as c:
+        disponibles = c.scalars(text("SELECT id FROM codigos_recuperacion WHERE usado_en IS NULL")).all()
+        assert disponibles == [personal]
