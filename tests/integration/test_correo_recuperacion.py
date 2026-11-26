@@ -361,7 +361,8 @@ def test_reenvio_fallido_preserva_codigo_y_espera(db, usuario, enviados, con_env
     db.expire_all()
     assert db.get(CodigoCorreo, intento.codigo_id).estado_envio == "fallido"
     assert correo.solicitar_recuperacion(db, nombre) is None
-    assert correo._pendiente(db, usuario.id, correo.RECUPERAR, destino=usuario.correo).id == anterior.codigo_id
+    vigente = correo._pendiente(db, usuario.id, correo.RECUPERAR, destino=usuario.correo)
+    assert vigente.id == anterior.codigo_id
     _envejecer(db, usuario)
     nuevo = _entregar(db, nombre)
     assert db.get(CodigoCorreo, nuevo.codigo_id).estado_envio == "aceptado"
