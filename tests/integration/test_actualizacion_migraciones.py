@@ -113,9 +113,14 @@ def test_v27_revoca_solo_el_codigo_de_v26_aunque_cambie_el_nombre(motor_vacio, t
         assert disponibles == [personal]
 
 
-@pytest.mark.parametrize("estado_codigo", ["disponible", "usado", "reemplazado"])
+@pytest.mark.parametrize(("estado_codigo", "buzon"), [
+    ("disponible", "v30"),
+    ("reemplazado", "v30"),
+    ("usado", "otra_direccion"),
+    ("disponible", "misma_direccion_reverificada"),
+])
 def test_v32_revoca_la_credencial_de_v30_y_preserva_el_acceso_personal(
-    motor_vacio, tmp_path, estado_codigo
+    motor_vacio, tmp_path, estado_codigo, buzon
 ):
     for archivo in ORIGEN.glob("V*.sql"):
         if int(archivo.name.split("__")[0][1:]) <= 29:
@@ -148,9 +153,17 @@ def test_v32_revoca_la_credencial_de_v30_y_preserva_el_acceso_personal(
             ), {"id": original.id})
         elif estado_codigo == "reemplazado":
             c.execute(text("DELETE FROM codigos_recuperacion WHERE id=:id"), {"id": original.id})
+        c.execute(text("UPDATE usuarios SET nombre_usuario='admin_renombrado' WHERE id=:id"),
+                  {"id": usuario_id})
+        if buzon != "v30":
+            c.execute(text("UPDATE usuarios SET correo_verificado_en=now() WHERE id=:id"), {"id": usuario_id})
+        if buzon == "otra_direccion":
+            c.execute(text("UPDATE usuarios SET correo='titular@example.test' WHERE id=:id"),
+                      {"id": usuario_id})
         c.execute(text(
-            "UPDATE usuarios SET nombre_usuario='admin_renombrado', correo='titular@example.test', "
-            "correo_verificado_en=now() WHERE id=:id"
+            "INSERT INTO codigos_correo (usuario_id, proposito, correo, codigo_hash, expira_en) "
+            "SELECT id, 'recuperar', correo, 'ficticio', now() + interval '10 minutes' "
+            "FROM usuarios WHERE id=:id"
         ), {"id": usuario_id})
         cuenta = text(
             "SELECT password_hash, token_version, correo, correo_verificado_en FROM usuarios WHERE id=:id"
@@ -168,4 +181,9 @@ def test_v32_revoca_la_credencial_de_v30_y_preserva_el_acceso_personal(
         if estado_codigo == "usado":
             esperadas[original.id] = usado_en
         assert filas == esperadas
-        assert c.execute(cuenta, {"id": usuario_id}).one() == antes
+        despues = c.execute(cuenta, {"id": usuario_id}).one()
+        assert despues[:3] == antes[:3]
+        assert despues.correo_verificado_en == (None if buzon == "v30" else antes.correo_verificado_en)
+        anulado = c.scalar(text("SELECT usado_en IS NOT NULL FROM codigos_correo WHERE usuario_id=:id"),
+                           {"id": usuario_id})
+        assert anulado == (buzon == "v30")

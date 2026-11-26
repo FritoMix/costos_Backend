@@ -116,10 +116,14 @@ comprobar el buzón por un canal conocido y completar la verificación desde **M
 contraseña actual. Si ya lo verificó personalmente después de V30, puede conservarlo. Si la
 dirección es incorrecta, debe quitarla desde **Mi cuenta** y registrar la correcta. Si falta
 activar el envío, debe conservar el acceso por contraseña y sus códigos personales mientras
-se completa la verificación. Los códigos y las contraseñas se introducen solo en DATACONTROL.
+se completa la verificación. V32 retira la marca automática cuando la dirección y la fecha coinciden con V30. Para reconocerla usa
+el registro original del código o la fecha de aplicación registrada por el migrador propio.
+También invalida los códigos de recuperación por correo pendientes de esa cuenta. Conserva la
+dirección y las verificaciones posteriores. En instalaciones con Flyway que hayan eliminado el
+registro original y carezcan de la fecha del migrador propio, la comprobación corresponde al titular.
 
 **Comprobación del despliegue.** En Render, confirmar la aplicación de V32 en el registro del
 migrador. En la base desplegada, auditar la revocación contando las filas que satisfacen el
-mismo predicado de V32. El resultado esperado es cero. La prueba del acceso del titular
+mismo prefijo y hash de V30, filtrando las filas con `usado_en IS NULL`. El resultado esperado es cero. La prueba del acceso del titular
 consiste en iniciar sesión con su propia contraseña. Para un rollback de la aplicación,
 conservar V32 y su checksum en el paquete de migraciones.
