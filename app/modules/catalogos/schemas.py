@@ -121,6 +121,8 @@ class HornoSalida(BaseModel):
     # Calculado: lo que la app realmente usa para convertir cm a litros.
     litros_por_cm: Decimal | None
     capacidad_bultos_hora: Decimal | None
+    # Lineas sin Bodega (V28). Papa usa capacidad_bultos_hora.
+    capacidad_kg_hora: Decimal | None = None
     categorias: list[CatalogoSalida]
     linea: LineaSalida | None = None
 
@@ -139,6 +141,8 @@ class HornoGuardar(BaseModel):
     capacidad_bultos_hora: Decimal | None = Field(
         default=None, gt=0, le=Decimal("9999.99")
     )
+    # Lineas sin Bodega (V28): kilos de materia prima por hora.
+    capacidad_kg_hora: Decimal | None = Field(default=None, gt=0, le=Decimal("99999.99"))
     categoria_ids: list[int] = Field(default_factory=list)
 
     @field_validator("capacidad_bultos_hora")
@@ -146,6 +150,13 @@ class HornoGuardar(BaseModel):
     def _capacidad_entera(cls, valor: Decimal | None) -> Decimal | None:
         if valor is not None and valor != valor.to_integral_value():
             raise ValueError("La capacidad debe ser un número entero de bultos por hora.")
+        return valor
+
+    @field_validator("capacidad_kg_hora")
+    @classmethod
+    def _capacidad_kg_entera(cls, valor: Decimal | None) -> Decimal | None:
+        if valor is not None and valor != valor.to_integral_value():
+            raise ValueError("La capacidad debe ser un número entero de kilos por hora.")
         return valor
 
 

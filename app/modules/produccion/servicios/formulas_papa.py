@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
 from app.db.transacciones import atomica
 from app.modules.bodega.models import ReferenciaPapa
-from app.modules.catalogos.models import Horno, Producto
+from app.modules.catalogos.models import Horno, Linea, Producto
 from app.modules.identidad.models import Usuario
 from app.modules.produccion.dominio.calculos import (
     CIEN,
@@ -305,14 +305,19 @@ def capacidad_de_hornos(db: Session) -> int:
     el horno que elija el supervisor.
     """
     capacidad = db.scalar(
-        select(func.max(Horno.capacidad_bultos_hora)).where(
+        select(func.max(Horno.capacidad_bultos_hora))
+        .join(Linea, Horno.linea_id == Linea.id)
+        .where(
             Horno.activo.is_(True),
             Horno.capacidad_bultos_hora.is_not(None),
+            # Solo hornos de lineas con Bodega (papa): la capacidad de las
+            # demas lineas no es en bultos (V28).
+            Linea.usa_bodega.is_(True),
         )
     )
     if capacidad is None:
         raise ErrorDeValidacion(
-            "Ningún horno activo tiene configurada su capacidad de bultos por hora. "
+            "Ningún horno de papa activo tiene configurada su capacidad de bultos por hora. "
             "Configúrala en Hornos para repartir la mezcla."
         )
     return int(capacidad)

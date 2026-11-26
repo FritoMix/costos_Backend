@@ -185,6 +185,11 @@ class Horno(Base):
         Numeric(6, 2), nullable=True
     )
 
+    # Capacidad en kilos por hora (V28) de las lineas sin Bodega (platano,
+    # pellet, trocillo, harinas, extruido). La papa sigue en bultos por hora
+    # porque la formula de Bodega reparte la mezcla en bultos.
+    capacidad_kg_hora: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+
     # Si el horno esta habilitado para ordenes de exportacion. Cuando una
     # orden es de exportacion, el horno elegido debe tener esto en True,
     # sin importar la categoria.
