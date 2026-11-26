@@ -333,7 +333,10 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
     # borra (solo Administracion puede hacerlo desde la API).
     if "capacidad_bultos_hora" in datos.model_fields_set:
         horno.capacidad_bultos_hora = datos.capacidad_bultos_hora
+    if "capacidad_kg_hora" in datos.model_fields_set:
+        horno.capacidad_kg_hora = datos.capacidad_kg_hora
     _aplicar_linea_horno(db, horno, datos.linea_id)
+    _ajustar_unidad_capacidad(db, horno)
 
     categorias = []
     for categoria_id in datos.categoria_ids:
@@ -342,6 +345,20 @@ def _aplicar_datos_horno(db: Session, horno: Horno, datos: HornoGuardar) -> None
             raise ErrorDeValidacion("Una de las categorías seleccionadas no existe.")
         categorias.append(categoria)
     horno.categorias = categorias
+
+
+def _ajustar_unidad_capacidad(db: Session, horno: Horno) -> None:
+    """
+    Cada horno guarda la capacidad en la unidad de su linea (V28): la papa
+    (linea con Bodega) en bultos por hora y las demas en kilos por hora. El
+    valor de la otra unidad se descarta para que nunca se mezclen: un horno
+    de platano con "bultos" alteraria el reparto de la mezcla de papa.
+    """
+    linea = db.get(Linea, horno.linea_id)
+    if linea is not None and linea.usa_bodega:
+        horno.capacidad_kg_hora = None
+    else:
+        horno.capacidad_bultos_hora = None
 
 
 def _aplicar_linea_horno(db: Session, horno: Horno, linea_id: int | None) -> None:
@@ -397,6 +414,11 @@ def actualizar_capacidad_horno(
     db: Session, horno_id: int, capacidad_bultos_hora: Decimal
 ) -> Horno:
     horno = obtener_horno(db, horno_id)
+    if not horno.linea.usa_bodega:
+        raise ErrorDeValidacion(
+            f'"{horno.nombre}" es de {horno.linea.nombre}: su capacidad va en kilos por hora '
+            "y se configura en Catálogos > Hornos."
+        )
     horno.capacidad_bultos_hora = capacidad_bultos_hora
     db.commit()
     db.refresh(horno)

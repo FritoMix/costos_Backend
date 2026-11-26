@@ -322,3 +322,76 @@ def test_sabores_por_categoria(db, datos_base):
         db, orden, RecepcionGuardar(sabor_id=jamon.id, **datos), op_sabor
     )
     assert recepcion.sabor_id == jamon.id
+
+
+def test_capacidad_en_kilos_para_lineas_sin_bodega(db, datos_base):
+    """V28: plátano y demás líneas sin Bodega guardan kg/h; la papa, bultos/h."""
+    from app.modules.produccion.servicios import formulas_papa
+
+    platano = _linea(db, "platano")
+    papa_capacidad = formulas_papa.capacidad_de_hornos(db)
+
+    # Un horno de plátano guarda kilos y descarta cualquier "bultos" que llegue.
+    horno = catalogos.crear_horno(
+        db,
+        HornoGuardar(
+            nombre="Hojuelas de plátano",
+            linea_id=platano.id,
+            capacidad_kg_hora=Decimal("450"),
+            capacidad_bultos_hora=Decimal("9000"),
+        ),
+    )
+    assert horno.capacidad_kg_hora == Decimal("450")
+    assert horno.capacidad_bultos_hora is None
+    # No altera la capacidad con la que Bodega reparte la mezcla de papa.
+    assert formulas_papa.capacidad_de_hornos(db) == papa_capacidad
+
+    # Un cliente viejo que solo manda bultos no le borra los kilos.
+    actualizado = catalogos.actualizar_horno(
+        db,
+        horno.id,
+        HornoGuardar(
+            nombre="Hojuelas de plátano", linea_id=platano.id, capacidad_bultos_hora=Decimal("30")
+        ),
+    )
+    assert actualizado.capacidad_kg_hora == Decimal("450")
+    assert actualizado.capacidad_bultos_hora is None
+
+    # El asistente de la orden solo ajusta bultos de hornos de papa.
+    with pytest.raises(ErrorDeValidacion, match="kilos por hora"):
+        catalogos.actualizar_capacidad_horno(db, horno.id, Decimal("40"))
+
+    # Un horno de papa guarda bultos y descarta los kilos.
+    papa = catalogos.crear_horno(
+        db,
+        HornoGuardar(
+            nombre="Horno papa nuevo",
+            capacidad_bultos_hora=Decimal("40"),
+            capacidad_kg_hora=Decimal("900"),
+        ),
+    )
+    assert papa.capacidad_bultos_hora == Decimal("40")
+    assert papa.capacidad_kg_hora is None
+
+
+def test_capacidad_vieja_en_bultos_de_otra_linea_no_entra_a_la_mezcla(db, datos_base):
+    """Un valor heredado en bultos de un horno de plátano no infla el reparto de papa."""
+    from app.modules.produccion.servicios import formulas_papa
+
+    papa_capacidad = formulas_papa.capacidad_de_hornos(db)
+    horno = Horno(
+        nombre="Plátano heredado",
+        activo=True,
+        linea_id=_linea(db, "platano").id,
+        apto_exportacion=False,
+        capacidad_bultos_hora=Decimal("9999"),
+    )
+    db.add(horno)
+    db.flush()
+    assert formulas_papa.capacidad_de_hornos(db) == papa_capacidad
+
+
+@pytest.mark.parametrize("valor", ["0", "-5", "450.5", "100000"])
+def test_capacidad_kg_invalida_se_rechaza(valor):
+    with pytest.raises(ValueError):
+        HornoGuardar(nombre="X", capacidad_kg_hora=Decimal(valor))
