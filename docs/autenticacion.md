@@ -127,3 +127,17 @@ migrador. En la base desplegada, auditar la revocación contando las filas que s
 mismo prefijo y hash de V30, filtrando las filas con `usado_en IS NULL`. El resultado esperado es cero. La prueba del acceso del titular
 consiste en iniciar sesión con su propia contraseña. Para un rollback de la aplicación,
 conservar V32 y su checksum en el paquete de migraciones.
+
+### Entrega de códigos de recuperación (V33)
+
+El envío de recuperación se registra como pendiente. Cuando el servicio de Google confirma la
+solicitud, el código queda aceptado y reemplaza a los anteriores. Aceptado indica que Google
+procesó el envío; la recepción en la bandeja se comprueba con el titular. Un fallo deja
+disponible el último código aceptado hasta que venza o se utilice. La persona puede solicitar
+otro después de un minuto, hasta cinco solicitudes por hora. Cambiar de buzón invalida los
+códigos de recuperación anteriores.
+
+En una prueba con un buzón controlado, verificar la dirección en Mi cuenta, pedir el código
+desde el login y completar el cambio de contraseña. Para diagnosticar el envío se pueden
+contar las filas por estado sin consultar direcciones, hashes ni el contenido de los mensajes.
+Un envío que permanece pendiente tras vencer puede corresponder a un proceso interrumpido.

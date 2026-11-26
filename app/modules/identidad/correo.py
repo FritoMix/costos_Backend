@@ -35,13 +35,15 @@ from dataclasses import dataclass
 from datetime import timedelta
 from html import escape
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errores import CredencialesInvalidas, ErrorDeValidacion
 from app.core.seguridad import hash_password, verificar_password
+from app.db.session import SessionLocal
 from app.modules.identidad import recuperacion
 from app.modules.identidad.models import CodigoCorreo, ConfiguracionCorreo, Usuario
+from app.modules.identidad.service import obtener_usuario
 from app.modules.identidad.sesiones import _HASH_FICTICIO, ahora
 
 logger = logging.getLogger("datacontrol.auth")
@@ -110,6 +112,7 @@ class Envio:
     url: str
     secreto: str
     mensaje: Mensaje
+    codigo_id: int | None = None
 
 
 # --- Configuracion del envio ------------------------------------------------
@@ -155,11 +158,11 @@ def regenerar_secreto(db: Session) -> ConfiguracionCorreo:
     return cfg
 
 
-def _envio(db: Session, mensaje: Mensaje) -> Envio | None:
+def _envio(db: Session, mensaje: Mensaje, codigo_id: int | None = None) -> Envio | None:
     cfg = db.get(ConfiguracionCorreo, 1)
     if cfg is None or not cfg.url_envio:
         return None
-    return Envio(url=cfg.url_envio, secreto=cfg.secreto, mensaje=mensaje)
+    return Envio(url=cfg.url_envio, secreto=cfg.secreto, mensaje=mensaje, codigo_id=codigo_id)
 
 
 def enviar(envio: Envio) -> None:
@@ -189,7 +192,7 @@ def enviar(envio: Envio) -> None:
         ) from error
     if not isinstance(resultado, dict) or resultado.get("ok") is not True:
         motivo = resultado.get("error") if isinstance(resultado, dict) else None
-        logger.error("correo.envio_rechazado motivo=%s", motivo)
+        logger.error("correo.envio_rechazado")
         if motivo == "secreto":
             raise ErrorDeValidacion(
                 "Google rechazó el envío: el script no tiene el secreto actual. "
@@ -199,13 +202,49 @@ def enviar(envio: Envio) -> None:
 
 
 def enviar_en_segundo_plano(envio: Envio | None) -> None:
-    """Para tareas en segundo plano: nunca lanza, solo deja constancia."""
+    """Registra el resultado de Google sin conservar el contenido del mensaje."""
     if envio is None:
         return
     try:
         enviar(envio)
-    except Exception:  # noqa: BLE001 - un correo fallido no debe tumbar nada
-        logger.exception("correo.envio_en_segundo_plano_fallido")
+    except Exception as error:
+        logger.warning("correo.envio_fallido codigo_id=%s tipo=%s", envio.codigo_id, type(error).__name__)
+        aceptado = False
+    else:
+        logger.info("correo.envio_aceptado codigo_id=%s", envio.codigo_id)
+        aceptado = True
+    if envio.codigo_id is not None:
+        # La sesión del request puede haberse cerrado al ejecutar esta tarea.
+        with SessionLocal.begin() as db:
+            _registrar_entrega(db, envio.codigo_id, aceptado)
+
+
+def _registrar_entrega(db: Session, codigo_id: int, aceptado: bool) -> None:
+    # Mismo orden de bloqueo que al verificar el buzón o consumir el código.
+    usuario_id = db.scalar(
+        select(Usuario.id).join(CodigoCorreo).where(CodigoCorreo.id == codigo_id).with_for_update(of=Usuario)
+    )
+    if usuario_id is None:
+        return
+    fila = db.execute(
+        update(CodigoCorreo)
+        .where(CodigoCorreo.id == codigo_id, CodigoCorreo.estado_envio == "pendiente")
+        .values(estado_envio="aceptado" if aceptado else "fallido")
+        .returning(CodigoCorreo.expira_en, CodigoCorreo.usado_en)
+    ).one_or_none()
+    if aceptado and fila is not None and fila.usado_en is None and fila.expira_en > ahora():
+        # Una respuesta tardía solo puede retirar solicitudes anteriores a la suya.
+        db.execute(
+            update(CodigoCorreo)
+            .where(
+                CodigoCorreo.usuario_id == usuario_id,
+                CodigoCorreo.proposito == RECUPERAR,
+                CodigoCorreo.id < codigo_id,
+                CodigoCorreo.usado_en.is_(None),
+                CodigoCorreo.expira_en > ahora(),
+            )
+            .values(expira_en=ahora())
+        )
 
 
 def probar(db: Session, para: str) -> None:
@@ -308,23 +347,27 @@ def _anular_pendientes(db: Session, usuario_id: int, proposito: str) -> None:
     )
 
 
-def _guardar_codigo(db: Session, usuario: Usuario, proposito: str, correo: str, codigo: str) -> None:
-    _anular_pendientes(db, usuario.id, proposito)
+def _guardar_codigo(db: Session, usuario: Usuario, proposito: str, correo: str, codigo: str) -> int:
+    if proposito == VERIFICAR:
+        _anular_pendientes(db, usuario.id, VERIFICAR)
     momento = ahora()
-    db.add(
-        CodigoCorreo(
-            usuario_id=usuario.id,
-            proposito=proposito,
-            correo=correo,
-            codigo_hash=hash_password(codigo),
-            creado_en=momento,
-            expira_en=momento + timedelta(minutes=MINUTOS_VIGENCIA),
-        )
+    fila = CodigoCorreo(
+        usuario_id=usuario.id,
+        proposito=proposito,
+        correo=correo,
+        codigo_hash=hash_password(codigo),
+        creado_en=momento,
+        expira_en=momento + timedelta(minutes=MINUTOS_VIGENCIA),
+        estado_envio="aceptado" if proposito == VERIFICAR else "pendiente",
     )
+    db.add(fila)
     db.flush()
+    return fila.id
 
 
-def _pendiente(db: Session, usuario_id: int, proposito: str, bloquear: bool = True) -> CodigoCorreo | None:
+def _pendiente(
+    db: Session, usuario_id: int, proposito: str, bloquear: bool = True, destino: str | None = None
+) -> CodigoCorreo | None:
     consulta = (
         select(CodigoCorreo)
         .where(
@@ -337,6 +380,11 @@ def _pendiente(db: Session, usuario_id: int, proposito: str, bloquear: bool = Tr
         .order_by(CodigoCorreo.creado_en.desc())
         .limit(1)
     )
+    if destino is not None:
+        consulta = consulta.where(
+            CodigoCorreo.correo == destino,
+            or_(CodigoCorreo.estado_envio.is_(None), CodigoCorreo.estado_envio == "aceptado"),
+        )
     return db.scalar(consulta.with_for_update() if bloquear else consulta)
 
 
@@ -356,6 +404,7 @@ def estado(db: Session, usuario: Usuario) -> dict:
 def iniciar_verificacion(db: Session, usuario: Usuario, correo: str, password_actual: str) -> dict:
     """Envia un codigo al correo nuevo. El correo solo cambia al verificarlo."""
     destino = _normalizar_correo(correo)
+    usuario = obtener_usuario(db, usuario.id, bloquear=True)
     if not verificar_password(password_actual, usuario.password_hash):
         raise ErrorDeValidacion("La contraseña actual no es correcta.")
     if not envio_configurado(db):
@@ -385,6 +434,7 @@ def iniciar_verificacion(db: Session, usuario: Usuario, correo: str, password_ac
 
 
 def confirmar_verificacion(db: Session, usuario: Usuario, codigo: str) -> dict:
+    usuario = obtener_usuario(db, usuario.id, bloquear=True)
     pendiente = _pendiente(db, usuario.id, VERIFICAR)
     if pendiente is None:
         raise ErrorDeValidacion("El código venció o ya no es válido. Pide uno nuevo.")
@@ -396,6 +446,8 @@ def confirmar_verificacion(db: Session, usuario: Usuario, codigo: str) -> dict:
             raise ErrorDeValidacion("Código incorrecto. Ya no quedan intentos: pide uno nuevo.")
         raise ErrorDeValidacion(f"Código incorrecto. Te quedan {quedan} intentos.")
     pendiente.usado_en = ahora()
+    if usuario.correo != pendiente.correo or not usuario.correo_verificado:
+        _anular_pendientes(db, usuario.id, RECUPERAR)
     usuario.correo = pendiente.correo
     usuario.correo_verificado_en = ahora()
     db.commit()
@@ -404,6 +456,7 @@ def confirmar_verificacion(db: Session, usuario: Usuario, codigo: str) -> dict:
 
 
 def quitar(db: Session, usuario: Usuario, password_actual: str) -> dict:
+    usuario = obtener_usuario(db, usuario.id, bloquear=True)
     if not verificar_password(password_actual, usuario.password_hash):
         raise ErrorDeValidacion("La contraseña actual no es correcta.")
     usuario.correo = None
@@ -440,7 +493,7 @@ def solicitar_recuperacion(db: Session, nombre_usuario: str) -> Envio | None:
     if not envio_configurado(db) or _demasiados_envios(db, usuario.id, RECUPERAR):
         return None
     codigo = _nuevo_codigo()
-    _guardar_codigo(db, usuario, RECUPERAR, usuario.correo, codigo)
+    codigo_id = _guardar_codigo(db, usuario, RECUPERAR, usuario.correo, codigo)
     envio = _envio(
         db,
         _plantilla(
@@ -450,9 +503,10 @@ def solicitar_recuperacion(db: Session, nombre_usuario: str) -> Envio | None:
             f"«{usuario.nombre_usuario}». Escribe este código en DATACONTROL para crear una nueva.",
             codigo,
         ),
+        codigo_id=codigo_id,
     )
     db.commit()
-    logger.warning("auth.correo_recuperacion_enviado usuario_id=%d", usuario.id)
+    logger.info("auth.correo_recuperacion_solicitada codigo_id=%d", codigo_id)
     return envio
 
 
@@ -466,7 +520,7 @@ def recuperar(db: Session, nombre_usuario: str, codigo: str, password_nueva: str
     usuario = _usuario_por_nombre(db, nombre)
     candidato = None
     if usuario is not None and usuario.puede_entrar and usuario.correo_verificado:
-        candidato = _pendiente(db, usuario.id, RECUPERAR)
+        candidato = _pendiente(db, usuario.id, RECUPERAR, destino=usuario.correo)
     # Siempre un bcrypt, exista o no el codigo: el tiempo no delata nada.
     valido = verificar_password(
         limpio if len(limpio) == 6 else "------",

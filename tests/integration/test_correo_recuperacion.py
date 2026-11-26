@@ -8,6 +8,7 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
+from sqlalchemy.orm import sessionmaker
 
 from app.core.errores import CredencialesInvalidas, ErrorDeValidacion
 from app.core.limite import limiter
@@ -26,8 +27,11 @@ URL = "https://script.google.com/macros/s/AKfycbxPRUEBA1234567890abc/exec"
 
 
 @pytest.fixture
-def enviados(monkeypatch):
+def enviados(monkeypatch, db):
     """En vez de llamar a Google, guarda los correos que se habrian enviado."""
+    monkeypatch.setattr(correo, "SessionLocal", sessionmaker(
+        bind=db.get_bind(), join_transaction_mode="create_savepoint"
+    ))
     lista: list[correo.Envio] = []
     monkeypatch.setattr(correo, "enviar", lista.append)
     return lista
@@ -157,6 +161,13 @@ def test_si_google_falla_no_queda_codigo(db, usuario, con_envio, monkeypatch):
     assert db.scalar(select(CodigoCorreo).where(CodigoCorreo.usuario_id == usuario.id)) is None
 
 
+def _entregar(db, nombre):
+    envio = correo.solicitar_recuperacion(db, nombre)
+    correo.enviar_en_segundo_plano(envio)
+    db.expire_all()
+    return envio
+
+
 def test_recuperar_contrasena_por_correo(db, usuario, enviados, con_envio):
     nombre = usuario.nombre_usuario
     # Sin correo verificado no se envia nada (y quien pide no se entera).
@@ -164,7 +175,7 @@ def test_recuperar_contrasena_por_correo(db, usuario, enviados, con_envio):
     assert correo.solicitar_recuperacion(db, "no_existe") is None
 
     _verificar(db, usuario, enviados)
-    envio = correo.solicitar_recuperacion(db, f" {nombre.upper()} ")
+    envio = _entregar(db, f" {nombre.upper()} ")
     assert envio.mensaje.para == "planta@example.com"
     assert nombre in envio.mensaje.texto
     codigo = _codigo(envio)
@@ -186,7 +197,7 @@ def test_codigo_de_recuperacion_se_anula_tras_cinco_fallos_y_al_vencer(db, usuar
     nombre = usuario.nombre_usuario
     _verificar(db, usuario, enviados)
     _envejecer(db, usuario)
-    codigo = _codigo(correo.solicitar_recuperacion(db, nombre))
+    codigo = _codigo(_entregar(db, nombre))
     malo = "000000" if codigo != "000000" else "111111"
     for i in range(5):
         with pytest.raises(CredencialesInvalidas):
@@ -205,7 +216,7 @@ def test_codigo_vencido_no_sirve(db, usuario, enviados, con_envio):
     nombre = usuario.nombre_usuario
     _verificar(db, usuario, enviados)
     _envejecer(db, usuario)
-    codigo = _codigo(correo.solicitar_recuperacion(db, nombre))
+    codigo = _codigo(_entregar(db, nombre))
     db.execute(update(CodigoCorreo).values(expira_en=ahora() - timedelta(seconds=1)))
     with pytest.raises(CredencialesInvalidas):
         correo.recuperar(db, nombre, codigo, NUEVA, IP)
@@ -312,3 +323,60 @@ def test_flujo_por_la_api(db, datos_base, usuario, enviados, cliente):
     cliente.post(f"{AUTH}/logout")
     cliente.post(f"{AUTH}/login", json={"nombre_usuario": usuario.nombre_usuario, "password": ACTUAL})
     assert cliente.get(f"{AUTH}/envio-correo").status_code == 403
+
+
+def test_cambio_de_buzon_anula_codigo_y_filtra_registros_historicos(db, usuario, enviados, con_envio):
+    _verificar(db, usuario, enviados)
+    viejo = _entregar(db, usuario.nombre_usuario)
+    _envejecer(db, usuario)
+    _verificar(db, usuario, enviados, "nuevo@example.com")
+    fila = db.get(CodigoCorreo, viejo.codigo_id)
+    assert fila.expira_en <= ahora()
+    # Simula un código previo a V33 que quedó activo con el correo antiguo.
+    fila.expira_en = ahora() + timedelta(minutes=5)
+    fila.estado_envio = None
+    db.flush()
+    with pytest.raises(CredencialesInvalidas):
+        correo.recuperar(db, usuario.nombre_usuario, _codigo(viejo), NUEVA, IP)
+    assert verificar_password(ACTUAL, usuario.password_hash)
+    nuevo = _entregar(db, usuario.nombre_usuario)
+    assert nuevo.mensaje.para == "nuevo@example.com"
+    correo.recuperar(db, usuario.nombre_usuario, _codigo(nuevo), NUEVA, IP)
+
+
+def test_reenvio_fallido_preserva_codigo_y_espera(db, usuario, enviados, con_envio, monkeypatch):
+    nombre = usuario.nombre_usuario
+    _verificar(db, usuario, enviados)
+    anterior = _entregar(db, nombre)
+    _envejecer(db, usuario)
+    intento = correo.solicitar_recuperacion(db, nombre)
+    assert db.get(CodigoCorreo, intento.codigo_id).estado_envio == "pendiente"
+
+    def rechazo(_envio):
+        raise ErrorDeValidacion("Envío rechazado")
+
+    with monkeypatch.context() as cambios:
+        cambios.setattr(correo, "enviar", rechazo)
+        correo.enviar_en_segundo_plano(intento)
+    db.expire_all()
+    assert db.get(CodigoCorreo, intento.codigo_id).estado_envio == "fallido"
+    assert correo.solicitar_recuperacion(db, nombre) is None
+    vigente = correo._pendiente(db, usuario.id, correo.RECUPERAR, destino=usuario.correo)
+    assert vigente.id == anterior.codigo_id
+    _envejecer(db, usuario)
+    nuevo = _entregar(db, nombre)
+    assert db.get(CodigoCorreo, nuevo.codigo_id).estado_envio == "aceptado"
+    assert db.get(CodigoCorreo, anterior.codigo_id).expira_en <= ahora()
+    correo.recuperar(db, nombre, _codigo(nuevo), NUEVA, IP)
+
+
+def test_confirmacion_tardia_no_reactiva_un_codigo_reemplazado(db, usuario, enviados, con_envio):
+    nombre = usuario.nombre_usuario
+    _verificar(db, usuario, enviados)
+    antiguo = correo.solicitar_recuperacion(db, nombre)
+    _envejecer(db, usuario)
+    nuevo = _entregar(db, nombre)
+    correo.enviar_en_segundo_plano(antiguo)
+    db.expire_all()
+    assert db.get(CodigoCorreo, antiguo.codigo_id).expira_en <= ahora()
+    correo.recuperar(db, nombre, _codigo(nuevo), NUEVA, IP)
