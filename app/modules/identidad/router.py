@@ -6,30 +6,40 @@ Rutas HTTP del modulo Identidad:
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.limite import obtener_ip_cliente
 from app.core.seguridad import borrar_cookie_sesion, poner_cookie_sesion
 from app.db.session import get_db
-from app.modules.identidad import recuperacion, service, sesiones
+from app.modules.identidad import correo, recuperacion, service, sesiones
 from app.modules.identidad.dependencias import UsuarioAutenticado, requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.identidad.schemas import (
     CambiarPasswordPeticion,
     CodigosGeneradosSalida,
+    EnvioCorreoGuardar,
+    EnvioCorreoSalida,
     EstadoCodigosSalida,
+    EstadoCorreoSalida,
     GenerarCodigosPeticion,
     LoginPeticion,
+    OpcionesRecuperacionSalida,
     PasswordTemporalSalida,
+    PruebaCorreoPeticion,
+    QuitarCorreoPeticion,
     RecuperarConCodigoPeticion,
+    RecuperarConCorreoPeticion,
+    RegistrarCorreoPeticion,
     RolSalida,
     SesionSalida,
+    SolicitarCodigoCorreoPeticion,
     SolicitudRecuperacion,
     UsuarioActualizar,
     UsuarioCrear,
     UsuarioSalida,
+    VerificarCorreoPeticion,
 )
 
 BD = Annotated[Session, Depends(get_db)]
@@ -127,6 +137,87 @@ def recuperar_con_codigo(datos: RecuperarConCodigoPeticion, db: BD, request: Req
         db, datos.nombre_usuario, datos.codigo, datos.password_nueva, obtener_ip_cliente(request)
     )
     return {"mensaje": "Listo. Ya puedes entrar con tu contraseña nueva.", "codigos_restantes": quedan}
+
+
+# --- Correo de recuperacion (V29) ------------------------------------------
+
+
+@router_auth.get("/recuperacion/opciones", response_model=OpcionesRecuperacionSalida)
+def opciones_recuperacion(db: BD) -> dict:
+    """Sin sesion: si la app puede enviar codigos por correo (no dice nada de ningun usuario)."""
+    return {"correo": correo.envio_configurado(db)}
+
+
+@router_auth.post("/recuperar-por-correo/solicitar", status_code=status.HTTP_202_ACCEPTED)
+def solicitar_codigo_por_correo(
+    datos: SolicitarCodigoCorreoPeticion, db: BD, tareas: BackgroundTasks
+) -> dict:
+    """Sin sesion. Responde siempre lo mismo; el correo sale en segundo plano."""
+    tareas.add_task(correo.enviar_en_segundo_plano, correo.solicitar_recuperacion(db, datos.nombre_usuario))
+    return {
+        "mensaje": "Si tu usuario tiene un correo verificado, en unos minutos te llega un código "
+        "de 6 dígitos. Revisa también la carpeta de spam."
+    }
+
+
+@router_auth.post("/recuperar-por-correo")
+def recuperar_por_correo(
+    datos: RecuperarConCorreoPeticion, db: BD, request: Request, tareas: BackgroundTasks
+) -> dict:
+    """Sin sesion: usuario + codigo del correo + contraseña nueva."""
+    aviso = correo.recuperar(
+        db, datos.nombre_usuario, datos.codigo, datos.password_nueva, obtener_ip_cliente(request)
+    )
+    tareas.add_task(correo.enviar_en_segundo_plano, aviso)
+    return {"mensaje": "Listo. Ya puedes entrar con tu contraseña nueva."}
+
+
+@router_auth.get("/correo", response_model=EstadoCorreoSalida)
+def estado_correo(usuario: UsuarioAutenticado, db: BD) -> dict:
+    return correo.estado(db, usuario)
+
+
+@router_auth.post("/correo", response_model=EstadoCorreoSalida)
+def registrar_correo(datos: RegistrarCorreoPeticion, usuario: UsuarioAutenticado, db: BD) -> dict:
+    """Envia un codigo al correo nuevo; queda guardado al verificarlo."""
+    return correo.iniciar_verificacion(db, usuario, datos.correo, datos.password_actual)
+
+
+@router_auth.post("/correo/verificar", response_model=EstadoCorreoSalida)
+def verificar_correo(datos: VerificarCorreoPeticion, usuario: UsuarioAutenticado, db: BD) -> dict:
+    return correo.confirmar_verificacion(db, usuario, datos.codigo)
+
+
+@router_auth.post("/correo/quitar", response_model=EstadoCorreoSalida)
+def quitar_correo(datos: QuitarCorreoPeticion, usuario: UsuarioAutenticado, db: BD) -> dict:
+    return correo.quitar(db, usuario, datos.password_actual)
+
+
+def _envio_salida(cfg) -> dict:
+    return {"url_envio": cfg.url_envio, "configurado": bool(cfg.url_envio), "script": correo.script(cfg)}
+
+
+@router_auth.get("/envio-correo", response_model=EnvioCorreoSalida)
+def ver_envio_correo(db: BD, _: SoloAdmin) -> dict:
+    cfg = correo.configuracion(db)
+    db.commit()
+    return _envio_salida(cfg)
+
+
+@router_auth.put("/envio-correo", response_model=EnvioCorreoSalida)
+def guardar_envio_correo(datos: EnvioCorreoGuardar, db: BD, _: SoloAdmin) -> dict:
+    return _envio_salida(correo.guardar_url(db, datos.url_envio))
+
+
+@router_auth.post("/envio-correo/regenerar-secreto", response_model=EnvioCorreoSalida)
+def regenerar_secreto_correo(db: BD, _: SoloAdmin) -> dict:
+    return _envio_salida(correo.regenerar_secreto(db))
+
+
+@router_auth.post("/envio-correo/prueba")
+def probar_envio_correo(datos: PruebaCorreoPeticion, db: BD, _: SoloAdmin) -> dict:
+    correo.probar(db, datos.para)
+    return {"mensaje": "Correo de prueba enviado. Revisa la bandeja de entrada (y spam)."}
 
 
 @router_usuarios.get("/para-recuperar", response_model=list[UsuarioSalida])

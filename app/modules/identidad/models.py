@@ -4,7 +4,7 @@ Modulo Identidad - tablas: roles, usuarios.
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, SmallInteger, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -84,6 +84,17 @@ class Usuario(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Correo de recuperacion (V29). Solo cuenta si esta verificado: el
+    # usuario escribio el codigo que le llego a ese correo.
+    correo: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    correo_verificado_en: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    @property
+    def correo_verificado(self) -> bool:
+        return self.correo is not None and self.correo_verificado_en is not None
+
     @property
     def puede_entrar(self) -> bool:
         return self.activo and not self.eliminado
@@ -121,3 +132,32 @@ class CodigoRecuperacion(Base):
     codigo_hash: Mapped[str] = mapped_column(String(100))
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     usado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CodigoCorreo(Base):
+    """Codigo de 6 digitos enviado al correo: verificarlo o recuperar la contraseña (V29)."""
+
+    __tablename__ = "codigos_correo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id", ondelete="CASCADE"))
+    proposito: Mapped[str] = mapped_column(String(20))
+    correo: Mapped[str] = mapped_column(String(254))
+    codigo_hash: Mapped[str] = mapped_column(String(100))
+    intentos: Mapped[int] = mapped_column(SmallInteger, default=0, server_default=text("0"))
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    usado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ConfiguracionCorreo(Base):
+    """Enlace del script de Gmail que envia los correos y su secreto (V29). Una sola fila."""
+
+    __tablename__ = "configuracion_correo"
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    url_envio: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    secreto: Mapped[str] = mapped_column(String(100))
+    actualizado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

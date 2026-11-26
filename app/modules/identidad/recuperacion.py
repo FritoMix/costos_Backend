@@ -150,26 +150,40 @@ def recuperar(db: Session, nombre_usuario: str, codigo: str, password_nueva: str
     valido = verificar_password(limpio[4:], candidato.codigo_hash if candidato else _HASH_FICTICIO)
 
     if candidato is None or not valido:
-        for fila in filas:
-            fila.fallos += 1
-            fila.ultimo_intento = momento
-            if fila.fallos >= limites[fila.clave]:
-                espera = min(900, 30 * 2 ** min(fila.fallos - limites[fila.clave], 5))
-                fila.bloqueado_hasta = momento + timedelta(seconds=espera)
+        _registrar_fallo(db, filas, limites, momento)
         db.commit()
         logger.warning("auth.recuperacion_fallida cuenta=%s", cuenta[:16])
         raise CredencialesInvalidas(_MENSAJE_FALLO)
 
     candidato.usado_en = momento
-    usuario.password_hash = hash_password(password_nueva)
-    usuario.debe_cambiar_password = False
-    usuario.token_version += 1
-    revocar_sesiones_usuario(db, usuario.id)
+    poner_password_recuperada(db, usuario, password_nueva)
+    _registrar_exito(filas, cuenta, momento)
+    db.commit()
+    logger.warning("auth.recuperacion_con_codigo usuario_id=%d", usuario.id)
+    return estado(db, usuario)["disponibles"]
+
+
+def _registrar_fallo(db: Session, filas: list[IntentoLogin], limites: dict, momento) -> None:
+    """Suma el fallo a la cuenta y a la IP; al pasar el limite bloquea por tiempo creciente."""
+    for fila in filas:
+        fila.fallos += 1
+        fila.ultimo_intento = momento
+        if fila.fallos >= limites[fila.clave]:
+            espera = min(900, 30 * 2 ** min(fila.fallos - limites[fila.clave], 5))
+            fila.bloqueado_hasta = momento + timedelta(seconds=espera)
+
+
+def _registrar_exito(filas: list[IntentoLogin], cuenta: str, momento) -> None:
     for fila in filas:
         if fila.clave == cuenta:
             fila.fallos = 0
             fila.bloqueado_hasta = None
         fila.ultimo_intento = momento
-    db.commit()
-    logger.warning("auth.recuperacion_con_codigo usuario_id=%d", usuario.id)
-    return estado(db, usuario)["disponibles"]
+
+
+def poner_password_recuperada(db: Session, usuario: Usuario, password_nueva: str) -> None:
+    """Contraseña nueva por recuperacion: cierra todas las sesiones de la cuenta."""
+    usuario.password_hash = hash_password(password_nueva)
+    usuario.debe_cambiar_password = False
+    usuario.token_version += 1
+    revocar_sesiones_usuario(db, usuario.id)
