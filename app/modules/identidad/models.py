@@ -142,6 +142,7 @@ class CodigoCorreo(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id", ondelete="CASCADE"))
     proposito: Mapped[str] = mapped_column(String(20))
+    estado_envio: Mapped[str | None] = mapped_column(String(12))
     correo: Mapped[str] = mapped_column(String(254))
     codigo_hash: Mapped[str] = mapped_column(String(100))
     intentos: Mapped[int] = mapped_column(SmallInteger, default=0, server_default=text("0"))

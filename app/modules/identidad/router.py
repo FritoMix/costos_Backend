@@ -155,8 +155,8 @@ def solicitar_codigo_por_correo(
     """Sin sesion. Responde siempre lo mismo; el correo sale en segundo plano."""
     tareas.add_task(correo.enviar_en_segundo_plano, correo.solicitar_recuperacion(db, datos.nombre_usuario))
     return {
-        "mensaje": "Si tu usuario tiene un correo verificado, en unos minutos te llega un código "
-        "de 6 dígitos. Revisa también la carpeta de spam."
+        "mensaje": "Si tu usuario tiene un correo verificado, se solicitará un código de 6 dígitos. "
+        "Revisa tu bandeja y la carpeta de spam."
     }
 
 
