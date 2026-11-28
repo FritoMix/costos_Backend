@@ -26,6 +26,7 @@ from app.db.session import get_db
 from app.modules.identidad.dependencias import requiere_roles
 from app.modules.identidad.models import RolCodigo, Usuario
 from app.modules.produccion.schemas import (
+    CorreccionBatch,
     FormulaGuardar,
     FormulaNocheGuardar,
     FormulaNocheSalida,
@@ -435,6 +436,16 @@ def editar_registro_horno(
     if registro.orden_id != orden_id:
         raise RecursoNoEncontrado("Ese registro no pertenece a la orden indicada.")
     return servicio_horno.editar_registro(db, registro, datos, usuario)
+
+
+@router.patch("/{orden_id}/registros-horno/{registro_id}/batch", response_model=RegistroHornoSalida)
+def corregir_batch(
+    orden_id: int, registro_id: int, datos: CorreccionBatch, db: BD, usuario: OperarioHorno
+):
+    registro = servicio_horno.obtener_registro(db, registro_id)
+    if registro.orden_id != orden_id:
+        raise RecursoNoEncontrado("Ese registro no pertenece a la orden indicada.")
+    return servicio_horno.corregir_batch(db, registro, datos, usuario)
 
 
 @router.delete("/{orden_id}/registros-horno/{registro_id}", status_code=status.HTTP_204_NO_CONTENT)

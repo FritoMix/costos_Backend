@@ -1152,3 +1152,48 @@ def test_medicion_turno_validada_y_autenticada(cliente: TestClient, caplog):
         assert cliente.post(ruta, json=datos).status_code == 204
     assert "medicion_turno" in caplog.text
     assert cliente.post(ruta, json={**datos, "accion": "desconocida"}).status_code == 422
+
+
+def test_correccion_batch_atomica_y_reintentos(cliente, db, datos_base):
+    from sqlalchemy import select
+
+    from app.db.auditoria import EventoOperacion
+    from tests.integration.test_lineas_de_produccion import _orden_batch
+
+    _, orden, autor = _orden_batch(db, datos_base)
+    autor.password_hash = hash_password(PASSWORD)
+    db.flush()
+    _login(cliente, autor.nombre_usuario)
+    base = f"{API}/ordenes/{orden.id}/registros-horno"
+    anterior = {"cantidad_baches": 12, "aceite_agregado_litros": "40.00"}
+    nuevo = {"cantidad_baches": 13, "aceite_agregado_litros": "42.50"}
+    original = _json(cliente.post(base, json={
+        **anterior, "kg_materia_prima": "300", "operarios_seleccion": 2,
+        "operarios_horno": 1, "observaciones": "Registro de prueba",
+    }), 201)
+    ruta = f"{base}/{original['id']}/batch"
+    cambio = {"anterior": anterior, "nuevo": nuevo}
+    _login(cliente, "operario_horno_prueba")
+    assert cliente.patch(ruta, json=cambio).status_code == 400
+    _login(cliente, autor.nombre_usuario)
+    assert cliente.patch(ruta, json={**cambio, "observaciones": "otra"}).status_code == 422
+    corregido = _json(cliente.patch(ruta, json=cambio))
+    assert corregido["cantidad_baches"] == 13
+    assert Decimal(corregido["volumen_aceite_litros"]) == Decimal("42.50")
+    for campo in ("id", "observaciones", "referencias", "kg_crudos_calculados",
+                  "desperdicios", "densidad_aceite_usada", "hora_inicio", "hora_fin", "usuario"):
+        assert corregido[campo] == original[campo]
+    assert _json(cliente.patch(ruta, json=cambio)) == corregido
+    obsoleto = {"anterior": anterior, "nuevo": {**nuevo, "cantidad_baches": 15}}
+    assert cliente.patch(ruta, json=obsoleto).status_code == 409
+    assert _json(cliente.get(base)) == [corregido]
+    eventos = db.scalars(select(EventoOperacion).where(
+        EventoOperacion.recurso == "horno", EventoOperacion.recurso_id == original["id"],
+        EventoOperacion.accion == "editar",
+    )).all()
+    assert len(eventos) == 1
+    assert eventos[0].antes["cantidad_baches"] == 12
+    assert eventos[0].despues["cantidad_baches"] == 13
+    _login(cliente)
+    _json(cliente.post(f"{API}/ordenes/{orden.id}/cancelar"))
+    assert cliente.patch(ruta, json={"anterior": nuevo, "nuevo": anterior}).status_code == 400
