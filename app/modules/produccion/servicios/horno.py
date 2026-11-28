@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.borrado_suave import marcar_eliminado_por
-from app.core.errores import ErrorDeValidacion, RecursoNoEncontrado
+from app.core.errores import ConflictoDeDatos, ErrorDeValidacion, RecursoNoEncontrado
 from app.core.tiempo import ahora_local
 from app.db.auditoria import registrar, snapshot
 from app.db.transacciones import atomica
@@ -52,7 +52,7 @@ from app.modules.produccion.models import (
     RegistroHorno,
     RegistroHornoReferencia,
 )
-from app.modules.produccion.schemas import RegistroHornoGuardar
+from app.modules.produccion.schemas import CorreccionBatch, RegistroHornoGuardar, ValoresBatch
 from app.modules.produccion.servicios.consultas_ordenes import verificar_linea
 from app.modules.produccion.servicios.registros import bloquear_orden
 from app.modules.produccion.servicios.tandas import (
@@ -515,6 +515,39 @@ def editar_registro(
     _aplicar_datos(db, registro, registro.orden, datos, franja)
     db.flush()
     db.refresh(registro)
+    registrar(db, "horno", registro.id, "editar", usuario.id, antes, snapshot(registro))
+    return registro
+
+
+@atomica
+def corregir_batch(
+    db: Session, registro: RegistroHorno, datos: CorreccionBatch, usuario: Usuario
+) -> RegistroHorno:
+    orden = bloquear_orden(db, registro.orden_id)
+    db.refresh(registro)
+    verificar_linea(usuario, orden)
+    _verificar_autoria(registro, usuario)
+    if registro.eliminado or not orden.horno.es_batch or registro.cantidad_baches is None:
+        raise RecursoNoEncontrado("No hay un registro batch disponible para corregir.")
+    if orden.estado != EstadoOrden.EN_PRODUCCION:
+        raise ErrorDeValidacion("Solo se puede corregir mientras la orden esté en producción.")
+    actual = ValoresBatch(
+        cantidad_baches=registro.cantidad_baches, aceite_agregado_litros=registro.aceite_agregado_litros
+    )
+    if actual == datos.nuevo:
+        return registro
+    if actual != datos.anterior:
+        raise ConflictoDeDatos("El registro cambió. Actualiza los valores antes de corregirlo.")
+    antes = snapshot(registro)
+    registro.cantidad_baches = datos.nuevo.cantidad_baches
+    if datos.nuevo.aceite_agregado_litros != actual.aceite_agregado_litros:
+        litros = datos.nuevo.aceite_agregado_litros
+        registro.aceite_agregado_litros = registro.volumen_aceite_litros = litros
+        densidad = registro.densidad_aceite_usada
+        registro.kg_aceite_consumido = (
+            (litros * densidad).quantize(CENTAVOS, rounding=ROUND_HALF_UP) if densidad is not None else None
+        )
+    db.flush()
     registrar(db, "horno", registro.id, "editar", usuario.id, antes, snapshot(registro))
     return registro
 

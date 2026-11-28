@@ -359,6 +359,18 @@ class RegistroReferenciaGuardar(BaseModel):
     cantidad_bultos: Decimal = Field(gt=0, max_digits=6, decimal_places=2)
 
 
+class ValoresBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cantidad_baches: int = Field(ge=1, le=999)
+    aceite_agregado_litros: Decimal = Field(ge=0, le=99999, max_digits=7, decimal_places=2)
+
+
+class CorreccionBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    anterior: ValoresBatch
+    nuevo: ValoresBatch
+
+
 class RegistroHornoGuardar(BaseModel):
     # Cada hora programada es una tanda (V17). Si la orden tiene hora de
     # inicio, la hora de la tanda la pone la app y estas se ignoran; solo
